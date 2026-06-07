@@ -1,0 +1,48 @@
+# Python相关
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# 虚拟环境
+venv/
+.env/
+
+# IDE配置
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 生成的文件
+*.gds
+*.sp
+*.spice
+output_circuit/
+simulations/
+*.log
+
+# 大文件（模型权重不建议提交到Git）
+saved_weights/
+saved_weights_sac/
+*.pth
+*.pt
+
+# 数据文件（可选，如果数据文件很大也不要提交）
+op_data/
