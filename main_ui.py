@@ -5,13 +5,12 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget,
     QVBoxLayout, QLabel
 )
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt
+
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_case1"))
-# 过滤掉那个烦人的sip警告
 warnings.filterwarnings("ignore", category=DeprecationWarning, message="sipPyTypeDict() is deprecated")
 
-# 导入两个子模块
 from device_generation.run import CircuitGenerator
 from ota_case1.ui import CircuitOptWindow
 
@@ -20,29 +19,45 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("模拟电路设计与优化综合平台")
-        self.resize(1600, 1000)  # 设置一个合适的窗口大小
+        self.resize(1600, 1000)
 
-        # 创建中央部件和主布局
+        # 设置整体浅色背景
+        self.setStyleSheet("QMainWindow { background-color: #f5f7fa; }")
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)  # 去掉边距
+        main_layout.setContentsMargins(20, 20, 20, 20)  # 增加外边距，留出呼吸空间
 
-        # 使用QTabWidget实现标签页切换
+        # 创建标签页
         self.tab_widget = QTabWidget()
-        self.tab_widget.setTabPosition(QTabWidget.North)  # 标签在顶部
+        self.tab_widget.setTabPosition(QTabWidget.North)
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
-                border: 1px solid #cccccc;
-                top: -1px;
+                border: none;
+                background-color: #ffffff;
+                border-radius: 12px;
+                margin-top: -1px;
             }
             QTabBar::tab {
-                padding: 10px 20px;
-                font-size: 14px;
+                background: #e9edf2;
+                color: #4a5568;
+                padding: 12px 28px;
+                margin-right: 4px;
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+                font-size: 15px;
+                font-weight: 500;
             }
             QTabBar::tab:selected {
-                background-color: #3b82f6;
-                color: white;
+                background: #ffffff;
+                color: #2b6ef7;
+                font-weight: bold;
+                border-bottom: 3px solid #2b6ef7;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #dce3eb;
+                color: #1a202c;
             }
         """)
         main_layout.addWidget(self.tab_widget)
@@ -51,38 +66,63 @@ class MainWindow(QMainWindow):
         self.circuit_generator_page = CircuitGenerator()
         self.circuit_optimizer_page = CircuitOptWindow()
 
-        # 创建新的空页面
+        # 创建开发中的功能页
         self.layout_page = self.create_empty_page("布局功能", "自动布局功能正在开发中...")
         self.routing_page = self.create_empty_page("布线功能", "自动布线功能正在开发中...")
 
-        # 添加所有标签页（按顺序排列）
+        # 添加标签页
         self.tab_widget.addTab(self.circuit_generator_page, "电路版图生成")
         self.tab_widget.addTab(self.circuit_optimizer_page, "电路参数优化")
         self.tab_widget.addTab(self.layout_page, "自动布局")
         self.tab_widget.addTab(self.routing_page, "自动布线")
 
     def create_empty_page(self, title, message):
-        """创建一个统一风格的空页面"""
+        """创建一个带科技感图标和文字的占位页面"""
         page = QWidget()
         layout = QVBoxLayout(page)
+        layout.setAlignment(Qt.AlignCenter)
 
-        # 居中显示提示文字
-        label = QLabel(message)
-        label.setFont(QFont("WenQuanYi Micro Hei", 16))
-        label.setAlignment(Qt.AlignCenter)
-        label.setStyleSheet("color: #666666;")
+        # 装饰图标（使用Unicode符号模拟）
+        icon_label = QLabel("⚡")
+        icon_label.setFont(QFont("WenQuanYi Micro Hei", 48))
+        icon_label.setAlignment(Qt.AlignCenter)
+        icon_label.setStyleSheet("color: #cbd5e0; margin-bottom: 20px;")
 
-        layout.addWidget(label)
+        # 提示文字
+        text_label = QLabel(message)
+        text_label.setFont(QFont("WenQuanYi Micro Hei", 16))
+        text_label.setAlignment(Qt.AlignCenter)
+        text_label.setStyleSheet("color: #718096; background: transparent;")
+
+        layout.addWidget(icon_label)
+        layout.addWidget(text_label)
         return page
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    # 设置全局字体，解决Linux下中文显示问题
+
+    # 全局字体与调色板
     font = QFont()
     font.setFamily("WenQuanYi Micro Hei")
     font.setPointSize(10)
     app.setFont(font)
+
+    # 设置全局默认调色板，确保所有控件继承浅色风格
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor("#f5f7fa"))
+    palette.setColor(QPalette.WindowText, QColor("#1a202c"))
+    palette.setColor(QPalette.Base, QColor("#ffffff"))
+    palette.setColor(QPalette.AlternateBase, QColor("#f0f2f5"))
+    palette.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+    palette.setColor(QPalette.ToolTipText, QColor("#1a202c"))
+    palette.setColor(QPalette.Text, QColor("#1a202c"))
+    palette.setColor(QPalette.Button, QColor("#e9edf2"))
+    palette.setColor(QPalette.ButtonText, QColor("#1a202c"))
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Highlight, QColor("#2b6ef7"))
+    palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    app.setPalette(palette)
 
     window = MainWindow()
     window.show()
