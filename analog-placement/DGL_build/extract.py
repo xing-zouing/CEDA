@@ -92,7 +92,7 @@ def add_match_comment_unified_group(sym_file, sp_file, output_file):
 
 def constraint_extraction():
     start_time = time.time()
-    graphs, _ = dgl.load_graphs('./netlists/CD2101_250710/rec_nmos100.dgl')
+    graphs, _ = dgl.load_graphs('./netlists/CD2101_250710/rec_nmos100_dgl.bin')
     graph = graphs[0]
     netlist_name = (''.join(chr(num) for num in graph.ndata['name'][0].tolist()).split('/')[0])
 
