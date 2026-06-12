@@ -1,5 +1,6 @@
 import re
 
+
 def parse_spice_value(value):
     """解析 SPICE 参数值，处理单位转换为浮点数（单位：微米）。"""
     units = {'f': 1e-15, 'p': 1e-12, 'n': 1e-9, 'u': 1e-6, 'm': 1e-3, 'k': 1e3, 'meg': 1e6}
@@ -11,6 +12,7 @@ def parse_spice_value(value):
             return num * units[unit] / 1e-6  # 转换为微米
         return num / 1e-6
     raise ValueError(f"无效的 SPICE 值：{value}")
+
 
 def longest_common_prefix_ending_with(strs, char='_'):
     """计算字符串列表的最长公共前缀，以指定字符结尾。"""
@@ -26,8 +28,14 @@ def longest_common_prefix_ending_with(strs, char='_'):
     else:
         return ""
 
+
 def parse_spice_netlist(file_path):
-    """解析 SPICE 网表，提取设备尺寸、连接信息、设备索引映射和逻辑组，处理 multi 参数生成多个实例。"""
+    """
+    通用SPICE/CDL网表解析器（双格式自动兼容）
+    支持：
+    - SP格式：M1/C0/R0 + w/l/multi
+    - CDL格式：XM1/XC0/XR0 + W/L/MR
+    """
     devices = []
     node_to_devices = {}
     device_name_to_index = {}
@@ -39,34 +47,45 @@ def parse_spice_netlist(file_path):
 
     for line in lines:
         line = line.strip()
-        if line.startswith('M') or line.startswith('C') or line.startswith('R'):
+        # ====================== 核心修改1：支持CDL的X前缀器件 ======================
+        if line.startswith(('M', 'C', 'R', 'XM', 'XC', 'XR')):
             parts = line.split()
             instance_name = parts[0]
 
+            # 自动去除CDL的X前缀，统一为SP格式命名
+            if instance_name.startswith('X'):
+                base_name_no_x = instance_name[1:]
+            else:
+                base_name_no_x = instance_name
+
             # 提取节点
-            if line.startswith('M'):
+            if instance_name.startswith(('M', 'XM')):
                 nodes = parts[1:5]  # 晶体管：漏极、栅极、源极、衬底
-            else:  # 'C' 或 'R'
+            else:  # 'C'/'R'/'XC'/'XR'
                 nodes = parts[1:3]  # 电容/电阻：正、负节点
 
-            # 提取参数
+            # ====================== 核心修改2：支持大小写参数和MR/multi ======================
             params = {}
-            param_start = 5 if line.startswith('M') else 3
+            param_start = 5 if instance_name.startswith(('M', 'XM')) else 3
             for param in parts[param_start:]:
                 if '=' in param:
                     key, value = param.split('=')
-                    params[key.strip()] = value.strip()
+                    # 参数名统一转为小写，同时支持大小写
+                    params[key.strip().lower()] = value.strip()
 
             # 处理设备尺寸
-            if line.startswith('M'):
-                if 'w' in params and 'l' in params:
-                    w = parse_spice_value(params['w'])
-                    l = parse_spice_value(params['l'])
-                    multi = int(params.get('multi', '1'))
-                    base_name = instance_name
+            if instance_name.startswith(('M', 'XM')):
+                # 同时支持w/W和l/L
+                if ('w' in params or 'W' in params) and ('l' in params or 'L' in params):
+                    w = parse_spice_value(params.get('w', params.get('W')))
+                    l = parse_spice_value(params.get('l', params.get('L')))
+                    # 同时支持multi和MR
+                    multi = int(params.get('multi', params.get('mr', '1')))
+
+                    base_name = base_name_no_x
                     group_indices = []
                     for m in range(multi):
-                        unique_instance_name = f"{instance_name}_{m}" if multi > 1 else instance_name
+                        unique_instance_name = f"{base_name}_{m}" if multi > 1 else base_name
                         devices.append({'name': unique_instance_name, 'width': w, 'height': l})
                         device_name_to_index[unique_instance_name] = index
                         group_indices.append(index)
@@ -80,17 +99,28 @@ def parse_spice_netlist(file_path):
                 else:
                     print(f"警告：晶体管 {instance_name} 缺少 'w' 或 'l' 参数")
                     continue
-            elif line.startswith('C') or line.startswith('R'):
-                if 'w' in params and 'l' in params:
-                    w = parse_spice_value(params['w'])
-                    l = parse_spice_value(params['l'])
-                    devices.append({'name': instance_name, 'width': w, 'height': l})
-                    device_name_to_index[instance_name] = index
-                    for node in nodes:
-                        if node not in node_to_devices:
-                            node_to_devices[node] = []
-                        node_to_devices[node].append(index)
-                    index += 1
+
+            elif instance_name.startswith(('C', 'R', 'XC', 'XR')):
+                if ('w' in params or 'W' in params) and ('l' in params or 'L' in params):
+                    w = parse_spice_value(params.get('w', params.get('W')))
+                    l = parse_spice_value(params.get('l', params.get('L')))
+                    # 电阻电容也支持multi
+                    multi = int(params.get('multi', params.get('mr', '1')))
+
+                    base_name = base_name_no_x
+                    group_indices = []
+                    for m in range(multi):
+                        unique_instance_name = f"{base_name}_{m}" if multi > 1 else base_name
+                        devices.append({'name': unique_instance_name, 'width': w, 'height': l})
+                        device_name_to_index[unique_instance_name] = index
+                        group_indices.append(index)
+                        for node in nodes:
+                            if node not in node_to_devices:
+                                node_to_devices[node] = []
+                            node_to_devices[node].append(index)
+                        index += 1
+                    if multi > 1:
+                        logical_groups[base_name] = group_indices
                 else:
                     print(f"警告：元件 {instance_name} 缺少 'w' 或 'l' 参数")
                     continue
@@ -98,8 +128,15 @@ def parse_spice_netlist(file_path):
     nets = [node_to_devices[node] for node in node_to_devices if len(node_to_devices[node]) > 1]
     return devices, nets, device_name_to_index, logical_groups
 
+
 def parse_sym_file(file_path, device_name_to_index):
-    """解析对称文件，返回对称对和配对共质心组，处理前缀和 multi 实例。"""
+    """
+    通用对称文件解析器（双格式自动兼容）
+    自动处理：
+    - 子电路前缀（如OTA3_my_M1 → M1）
+    - CDL的X前缀（如XM1 → M1）
+    - multi实例匹配
+    """
     sym_pairs = []
     cc_pairs = []  # 存储配对的共质心组，例如 [(group1, group2), ...]
 
@@ -127,13 +164,25 @@ def parse_sym_file(file_path, device_name_to_index):
             parts = [name[len(prefix):] for name in parts]
             if len(parts) == 2:  # 对称对
                 dev1, dev2 = parts
-                indices1 = [idx for name, idx in device_name_to_index.items() if
-                            name == dev1 or name.startswith(dev1 + '_')]
-                indices2 = [idx for name, idx in device_name_to_index.items() if
-                            name == dev2 or name.startswith(dev2 + '_')]
+                # ====================== 核心修改3：自动匹配带/不带X前缀的器件 ======================
+                indices1 = []
+                indices2 = []
+                for name, idx in device_name_to_index.items():
+                    # 支持：dev1 / Xdev1 / dev1_0 / Xdev1_0
+                    if (name == dev1 or
+                            name == f"X{dev1}" or
+                            name.startswith(f"{dev1}_") or
+                            name.startswith(f"X{dev1}_")):
+                        indices1.append(idx)
+                    if (name == dev2 or
+                            name == f"X{dev2}" or
+                            name.startswith(f"{dev2}_") or
+                            name.startswith(f"X{dev2}_")):
+                        indices2.append(idx)
+
                 if indices1 and indices2:
                     if len(indices1) == len(indices2):
-                        for idx1, idx2 in zip(indices1, indices2):
+                        for idx1, idx2 in zip(sorted(indices1), sorted(indices2)):
                             sym_pairs.append((idx1, idx2))
                         if len(indices1) > 1:
                             cc_pairs.append((indices1, indices2))
@@ -143,8 +192,13 @@ def parse_sym_file(file_path, device_name_to_index):
                     print(f"警告：对称对 {dev1}, {dev2} 未在网表中找到")
             elif len(parts) == 1:  # 自对称设备
                 dev = parts[0]
-                indices = [idx for name, idx in device_name_to_index.items() if
-                           name == dev or name.startswith(dev + '_')]
+                indices = []
+                for name, idx in device_name_to_index.items():
+                    if (name == dev or
+                            name == f"X{dev}" or
+                            name.startswith(f"{dev}_") or
+                            name.startswith(f"X{dev}_")):
+                        indices.append(idx)
                 if indices:
                     if len(indices) == 1:
                         sym_pairs.append((indices[0], indices[0]))  # 单设备自对称
