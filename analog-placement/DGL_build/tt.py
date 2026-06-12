@@ -2,7 +2,7 @@ import dgl
 import torch
 
 # 加载保存的DGL图
-graphs, _ = dgl.load_graphs("./rec_nmos100_dgl.bin")
+graphs, _ = dgl.load_graphs("./compare.dgl")
 G = graphs[0]
 
 print("=== 基本结构验证 ===")

@@ -11,10 +11,14 @@ vdd_set = ["vdd", "vdd_and", "vdd_c", "vdd_comp", "vdd_gm", "VDD", "VDDA", "veld
 # pmos_set = ["p33e2r", "p50e2r", "p18", "p15ll", "pch_lvt_mac"]
 # capacitor_set = ["mim1_ckt", "mim2_ckt", "cfmom_2t"]
 # # 180nm数据的主要器件类型
-nmos_set = ["n18_ckt", "n50_ckt"]
-pmos_set = ["p18_ckt", "p50_ckt"]
-capacitor_set = ["mim2_ckt"]
-resistor_set = ["rpposab_ckt", "rpposab_ckt_p"]
+nmos_set = []
+pmos_set = []
+capacitor_set = []
+resistor_set = []
+#nmos_set = ["n18_ckt", "n50_ckt"]
+#pmos_set = ["p18_ckt", "p50_ckt"]
+#capacitor_set = ["mim2_ckt"]
+#resistor_set = ["rpposab_ckt", "rpposab_ckt_p"]
 # 130nm工艺主要器件类型
 #nmos_set = ["n33e2r", "n50e2r"]
 #pmos_set = ["p33e2r", "p50e2r"]
