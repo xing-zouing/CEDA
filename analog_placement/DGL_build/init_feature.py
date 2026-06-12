@@ -10,27 +10,34 @@ import re  # 新增：导入正则表达式模块
 
 # 工业级健壮的参数提取函数，处理所有可能的格式
 def get_param(dev, key, default=0.0):
-    # 1. 检查参数是否存在
-    if key not in dev.param:
-        return default
+    # 参数名别名映射：同时支持CDL和SP格式
+    alias_map = {
+        'MR': ['MR', 'multi', 'm'],  # 并联数
+        'L': ['L', 'l'],             # 沟道长度
+        'W': ['W', 'w'],             # 沟道宽度
+        'NF': ['NF', 'nf', 'nfingers'] ,# 指数量
+        'LR': ['LR', 'L', 'l'],
+        'WR': ['WR', 'W', 'w']
+    }
 
-    value_str = dev.param[key].strip()
+    # 获取该key对应的所有别名
+    aliases = alias_map.get(key, [key])
 
-    # 2. 检查参数值是否为空
-    if not value_str:
-        return default
+    # 遍历所有别名，找到第一个存在的参数
+    for alias in aliases:
+        if alias in dev.param:
+            value_str = dev.param[alias].strip()
+            if not value_str:
+                continue
+            match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', value_str)
+            if match:
+                try:
+                    return float(match.group())
+                except ValueError:
+                    continue
 
-    # 3. 使用正则表达式提取所有数字部分（支持整数、小数、科学计数法）
-    match = re.search(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', value_str)
-
-    if match:
-        try:
-            return float(match.group())
-        except ValueError:
-            return default
-    else:
-        # 4. 如果没有找到数字，返回默认值
-        return default
+    # 所有别名都不存在，返回默认值
+    return default
 
 
 # tensor要求张量维度保持一致，因此需要对不一致的名称长度进行补齐，使用‘/’进行补齐，对应ord值为47
@@ -116,9 +123,18 @@ def initFeature(G_nx, topCkt):  # 输入的参数 G_nx是MultiDiGraph， topCkt�
                 f[-1] = WR / 1e-3
                 labels.append(2)
 
+            elif dev.type == 'cfmom':
+                L = get_param(dev, 'L')
+                W = get_param(dev, 'W')
+                MR = get_param(dev, 'MR')
+                f[-3] = MR
+                f[-2] = L / 1e-3
+                f[-1] = W / 1e-3
+                labels.append(2)
+
         # 修改：电阻参数（M→MR，支持rpposab_ckt_p）
         elif dev.isRes():
-            if dev.type in ['rpposab_ckt', 'rpposab_ckt_p']:
+            if dev.type in ['rpposab_ckt', 'rpposab_ckt_p','rppolywo']:
                 W = get_param(dev, 'W')
                 L = get_param(dev, 'L')
                 MR = get_param(dev, 'MR')

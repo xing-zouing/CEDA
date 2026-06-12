@@ -42,13 +42,17 @@ def auto_classify_devices(type_list):
     resistor_set.clear()
 
     for dev_type in type_list:
-        t = dev_type.lower()  # 忽略大小写兼容
-        if t.startswith("n"):
+        t = dev_type.lower()
+        # NMOS：n开头 或 包含nch
+        if t.startswith("n") or "nch" in t:
             nmos_set.append(dev_type)
-        elif t.startswith("p"):
+        # PMOS：p开头 或 包含pch
+        elif t.startswith("p") or "pch" in t:
             pmos_set.append(dev_type)
+        # 电容：包含mim/cfmom
         elif "mim" in t or "cfmom" in t:
             capacitor_set.append(dev_type)
+        # 电阻：r开头
         elif t.startswith("r"):
             resistor_set.append(dev_type)
 
@@ -101,8 +105,8 @@ def cdl_to_dgl(cdl_file_path, save_path=None):
 
 if __name__ == "__main__":
     # 网表路径 & 保存路径
-    CDL_FILE = "compare.cdl"
-    SAVE_FILE = "./rec_nmos100_dgl——compare.bin"
+    CDL_FILE = "ota1.sp"
+    SAVE_FILE = "./ota1.dgl"
 
     # 执行转换
     G_dgl, topCkt = cdl_to_dgl(CDL_FILE, SAVE_FILE)

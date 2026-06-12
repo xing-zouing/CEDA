@@ -2,8 +2,8 @@ from LAYOUT import optimize_layout
 
 if __name__ == "__main__":
     x, y = optimize_layout(
-        netlist_file="mycase/ota4.sp",
-        sym_file="mycase/ota4.sym"
+        netlist_file="mycase/ota1.sp",
+        sym_file="mycase/ota1.sym"
     )
     # x, y = optimize_layout(
     #     netlist_file="mycase/ota4.sp",

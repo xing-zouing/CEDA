@@ -1,5 +1,11 @@
 import matplotlib
-matplotlib.use('TkAgg')
+import sys
+
+# 自动检测当前运行的后端，避免冲突
+if 'PyQt5' in sys.modules or 'PyQt6' in sys.modules:
+    matplotlib.use('Qt5Agg')
+else:
+    matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np

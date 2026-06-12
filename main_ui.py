@@ -9,11 +9,13 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_case1"))
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "analog_placement"))
+
 warnings.filterwarnings("ignore", category=DeprecationWarning, message="sipPyTypeDict() is deprecated")
 
 from device_generation.run import CircuitGenerator
 from ota_case1.ui import CircuitOptWindow
-
+from analog_placement.layout_ui import AutoLayoutWindow
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -67,7 +69,7 @@ class MainWindow(QMainWindow):
         self.circuit_optimizer_page = CircuitOptWindow()
 
         # 创建开发中的功能页
-        self.layout_page = self.create_empty_page("布局功能", "自动布局功能正在开发中...")
+        self.layout_page = AutoLayoutWindow()
         self.routing_page = self.create_empty_page("布线功能", "自动布线功能正在开发中...")
 
         # 添加标签页
