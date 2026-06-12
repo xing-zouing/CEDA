@@ -21,7 +21,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("模拟电路设计与优化综合平台")
-        self.resize(1600, 1000)
+        self.resize(1000, 800)
 
         # 设置整体浅色背景
         self.setStyleSheet("QMainWindow { background-color: #f5f7fa; }")

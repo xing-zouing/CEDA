@@ -1,6 +1,10 @@
 import sys
+import subprocess
 import os
-from PyQt5.QtWidgets import QApplication,QVBoxLayout,QWidget
+from PyQt5.QtWidgets import (
+    QApplication, QVBoxLayout, QWidget, QPushButton, QMessageBox
+)
+from PyQt5.QtCore import Qt
 from device_generation.ui import CircuitUI
 from device_generation.netlist_parser import NetlistParser
 from device_generation.gds_generator import GDSGenerator
@@ -20,11 +24,25 @@ class CircuitGenerator(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.ui)
         layout.setContentsMargins(0, 0, 0, 0)
+        # 新增：布局上下间距，让按钮和主体区分开
+        layout.setSpacing(10)
+
+        # ===================== 【修改】只保留 GDS 目录变量，移除文件/批量标记 =====================
+        self.last_gds_dir = ""   # 记录最后一次 GDS 保存目录
+        # 按钮文字改为更直观的描述
+        self.open_klayout_btn = QPushButton("打开 GDS 保存文件夹")
+        self.open_klayout_btn.setMinimumHeight(35)
+        self.open_klayout_btn.setEnabled(False)  # 初始禁用，生成GDS后才可用
+        self.open_klayout_btn.clicked.connect(self.open_gds_folder)
+        layout.addWidget(self.open_klayout_btn)
+        # =================================================================
+
         self.parser = NetlistParser()
         self.generator = GDSGenerator()
         self.connect_ui_events()
 
-    def connect_ui_events(self):# 定义处理函数字典
+    def connect_ui_events(self):
+        # 定义处理函数字典
         handlers = {
             'generate_component': self.handle_generate_component,
             'generate_capacitor': self.handle_generate_capacitor,
@@ -32,6 +50,33 @@ class CircuitGenerator(QWidget):
             'generate_from_netlist': self.handle_generate_from_netlist
         }
         self.ui.connect_signals(handlers)
+
+    # ===================== 【重写】核心函数：打开GDS文件夹 =====================
+    def open_gds_folder(self):
+        """WSL专用稳定打开文件夹方案，用wslpath转换Windows路径"""
+        if not self.last_gds_dir or not os.path.isdir(self.last_gds_dir):
+            QMessageBox.warning(self, "提示", "暂无GDS目录，请先生成 GDS 文件！")
+            return
+
+        try:
+            # 调用wslpath把Linux路径转为Windows可识别完整路径
+            result = subprocess.check_output(
+                ["wslpath", "-w", self.last_gds_dir],
+                text=True
+            )
+            win_dir = result.strip()
+
+            # 用explorer打开转换后的标准Windows路径
+            subprocess.Popen(["explorer.exe", win_dir])
+            QMessageBox.information(self, "成功", f"已打开GDS目录：\n{self.last_gds_dir}")
+
+        except subprocess.CalledProcessError:
+            # 兜底：唤起WSL内部Linux文件管理器
+            subprocess.Popen(["xdg-open", self.last_gds_dir])
+            QMessageBox.information(self, "提示", "Windows路径转换失败，已打开WSL本地文件夹")
+        except Exception as e:
+            QMessageBox.critical(self, "打开失败", f"错误详情：{str(e)}")
+    # =================================================================
 
     def handle_generate_component(self):
         """处理生成组件按钮点击"""
@@ -98,6 +143,10 @@ class CircuitGenerator(QWidget):
 
             if success:
                 self.ui.show_info("成功", f"电阻GDS文件已生成：{result}")
+                # ===================== 【修改】提取文件所在目录 =====================
+                self.last_gds_dir = os.path.dirname(result)
+                self.open_klayout_btn.setEnabled(True)
+                # =================================================================
             else:
                 self.ui.show_error("生成失败", f"生成过程出错：{result}")
 
@@ -229,6 +278,10 @@ class CircuitGenerator(QWidget):
 
             if success:
                 self.ui.show_info("成功", f"电容GDS文件已生成：{result}")
+                # ===================== 【修改】提取文件所在目录 =====================
+                self.last_gds_dir = os.path.dirname(result)
+                self.open_klayout_btn.setEnabled(True)
+                # =================================================================
             else:
                 self.ui.show_error("生成失败", f"生成过程出错：{result}")
 
@@ -301,11 +354,15 @@ class CircuitGenerator(QWidget):
                 'attr': params['attr'],
                 'spectre': params['spectre'],
                 'pinConType': pin_con_type,
-                'bulkCon': params['bulk_con']
+                'bulk_con': params['bulk_con']
             })
 
             if success:
                 self.ui.show_info("成功", f"MOS管GDS文件已生成：{result}")
+                # ===================== 【修改】提取文件所在目录 =====================
+                self.last_gds_dir = os.path.dirname(result)
+                self.open_klayout_btn.setEnabled(True)
+                # =================================================================
             else:
                 self.ui.show_error("生成失败", f"生成过程出错：{result}")
 
@@ -315,7 +372,7 @@ class CircuitGenerator(QWidget):
             self.ui.show_error("生成失败", f"生成过程出错：{str(e)}")
 
     def handle_generate_from_netlist(self):
-        """处理从网表生成"""
+        """处理从网表生成（批量GDS）"""
         netlist_path = self.ui.get_netlist_path()
 
         if not netlist_path:
@@ -363,6 +420,11 @@ class CircuitGenerator(QWidget):
             result_message += f"文件存储路径：{results['output_dir']}"
 
             self.ui.show_info("生成完成", result_message)
+
+            # ===================== 【修改】直接赋值目录 =====================
+            self.last_gds_dir = results['output_dir']
+            self.open_klayout_btn.setEnabled(True)
+            # =================================================================
 
             # 如果有失败项，显示详细信息
             if results['failed'] > 0:
