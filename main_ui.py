@@ -3,19 +3,22 @@ import sys
 import warnings
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget,
-    QVBoxLayout, QLabel
+    QVBoxLayout, QLabel, QSizePolicy
 )
 from PyQt5.QtGui import QFont, QPalette, QColor
 from PyQt5.QtCore import Qt
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "ota_case1"))
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "analog_placement"))
-
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "rsmt_router"))
 warnings.filterwarnings("ignore", category=DeprecationWarning, message="sipPyTypeDict() is deprecated")
 
 from device_generation.run import CircuitGenerator
 from ota_case1.ui import CircuitOptWindow
 from analog_placement.layout_ui import AutoLayoutWindow
+# 导入布局布线模块
+from rsmt_router.routing_ui import RSMTRoutingWidget
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -34,6 +37,12 @@ class MainWindow(QMainWindow):
         # 创建标签页
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabPosition(QTabWidget.North)
+
+        # ====================== 【新增修复1】标签自动平分宽度 + 禁止文字省略 ======================
+        self.tab_widget.tabBar().setExpanding(True)  # 所有标签平分整个窗口宽度
+        self.tab_widget.tabBar().setElideMode(Qt.ElideNone)  # 禁止文字省略，强制完整显示
+        # ==========================================================================================
+
         self.tab_widget.setStyleSheet("""
             QTabWidget::pane {
                 border: none;
@@ -44,7 +53,10 @@ class MainWindow(QMainWindow):
             QTabBar::tab {
                 background: #e9edf2;
                 color: #4a5568;
-                padding: 12px 28px;
+                /* ====================== 【修改修复2】调整内边距+增加最小宽度 ====================== */
+                padding: 12px 16px;  /* 左右内边距从28px缩小，给文字留出更多空间 */
+                min-width: 110px;    /* 每个标签最小宽度，保底放下6个汉字 */
+                /* ================================================================================== */
                 margin-right: 4px;
                 border-top-left-radius: 10px;
                 border-top-right-radius: 10px;
@@ -70,7 +82,7 @@ class MainWindow(QMainWindow):
 
         # 创建开发中的功能页
         self.layout_page = AutoLayoutWindow()
-        self.routing_page = self.create_empty_page("布线功能", "自动布线功能正在开发中...")
+        self.routing_page = RSMTRoutingWidget()
 
         # 添加标签页
         self.tab_widget.addTab(self.circuit_generator_page, "电路版图生成")
