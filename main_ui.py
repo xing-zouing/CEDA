@@ -8,11 +8,13 @@ if getattr(sys, 'frozen', False):
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QWidget,
-    QVBoxLayout, QHBoxLayout, QLabel, QSizePolicy, QPushButton,
-    QFrame
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QButtonGroup, QSizePolicy
 )
-from PyQt5.QtGui import QFont, QPalette, QColor, QIcon, QPainter, QPixmap
-from PyQt5.QtCore import Qt, pyqtSignal, QSize
+from PyQt5.QtGui import (
+    QFont, QPalette, QColor, QIcon, QPainter, QPixmap, QPainterPath
+)
+from PyQt5.QtCore import Qt, pyqtSignal, QSize, QRectF
 
 
 if getattr(sys, 'frozen', False):
@@ -86,135 +88,246 @@ class FunctionPageWrapper(QWidget):
         main_layout.addWidget(content_widget, 1)
 
 
+# ====================== 主页样式与图片控件 ======================
+
+# 蓝色色阶：主色 #2b6ef7 / 深色 #1e3a8a / 浅色 #dbeafe / 边框 #bfdbfe / 背景 #f5f7fa
+HOME_STYLE = """
+#homePage {
+    background-color: #f5f7fa;
+}
+
+/* 顶部通栏横幅：主色到深色横向渐变 */
+#header {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 #2b6ef7, stop:1 #1e5bbf);
+    border-radius: 12px;
+}
+#headerTitle {
+    color: #ffffff;
+    font-size: 34px;
+    font-weight: bold;
+}
+#headerSubtitle {
+    color: #ffffff;
+    font-size: 18px;
+}
+
+/* 左侧导航按钮 */
+#navBar QPushButton {
+    background-color: #dbeafe;
+    color: #1e3a8a;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+}
+#navBar QPushButton:hover {
+    background-color: #bfdbfe;
+}
+#navBar QPushButton:checked {
+    background-color: #1e3a8a;
+    color: #ffffff;
+}
+
+/* 右侧内容区外框 */
+#contentFrame {
+    background-color: #ffffff;
+    border: 2px solid #bfdbfe;
+    border-radius: 12px;
+}
+
+/* 底部页脚 */
+#footer {
+    background-color: #1e3a8a;
+    color: #ffffff;
+    font-size: 12px;
+    border-radius: 8px;
+}
+"""
+
+
+def circular_pixmap(image_path, size, padding=9):
+    """白底圆形徽标：logo 等比缩放后完整放进圈内（不裁剪）"""
+    target = QPixmap(size, size)
+    target.fill(Qt.transparent)
+
+    painter = QPainter(target)
+    painter.setRenderHint(QPainter.Antialiasing)
+    painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+    circle = QPainterPath()
+    circle.addEllipse(0, 0, size, size)
+    painter.fillPath(circle, QColor("#ffffff"))
+    painter.setClipPath(circle)
+
+    src = QPixmap(image_path)
+    if not src.isNull():
+        inner = size - 2 * padding
+        fitted = src.scaled(inner, inner, Qt.KeepAspectRatio,
+                            Qt.SmoothTransformation)
+        painter.drawPixmap((size - fitted.width()) // 2,
+                           (size - fitted.height()) // 2, fitted)
+    painter.end()
+    return target
+
+
+class RoundedImage(QWidget):
+    """等比缩放铺满容器、按圆角矩形裁剪的图片控件（无留白）"""
+
+    def __init__(self, image_path, radius=10, parent=None):
+        super().__init__(parent)
+        self._radius = radius
+        self._pixmap = QPixmap(image_path)
+        self._scaled = None
+        self._scaled_for = QSize()
+
+    def paintEvent(self, event):
+        if self._pixmap.isNull() or self.width() <= 0 or self.height() <= 0:
+            return
+
+        # 原图很大，缩放很贵，只在尺寸变化时重算一次
+        if self._scaled is None or self._scaled_for != self.size():
+            # 等比放大到能铺满整个容器，再居中裁剪掉多余部分
+            self._scaled = self._pixmap.scaled(
+                self.size(), Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation)
+            self._scaled_for = self.size()
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        clip = QPainterPath()
+        clip.addRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        painter.setClipPath(clip)
+
+        offset_x = (self._scaled.width() - self.width()) // 2
+        offset_y = (self._scaled.height() - self.height()) // 2
+        painter.drawPixmap(0, 0, self._scaled,
+                           offset_x, offset_y, self.width(), self.height())
+
+
 # ====================== 主页（HomePage） ======================
 class HomePage(QWidget):
-    """软件主页，标题带右侧logo + 卡片式功能入口"""
+    """软件主页：顶部横幅 + 左侧导航 + 右侧图片区 + 底部页脚"""
     # 四个跳转信号，分别对应四个功能
     jump_to_gen = pyqtSignal()
     jump_to_opt = pyqtSignal()
     jump_to_place = pyqtSignal()
     jump_to_route = pyqtSignal()
 
+    # (按钮文字, 对应信号)，顺序即界面上的排列顺序
+    NAV_ITEMS = (
+        ("电路版图生成", "jump_to_gen"),
+        ("自动布局", "jump_to_place"),
+        ("电路参数优化", "jump_to_opt"),
+        ("自动布线", "jump_to_route"),
+    )
+    DEFAULT_NAV = "自动布局"  # 默认选中的导航项
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("homePage")
+        self.setStyleSheet(HOME_STYLE)
 
-        # 样式表：纯色背景 + 卡片按钮样式
-        self.setStyleSheet("""
-            #homePage {
-                background-color: #f5f7fa;
-            }
-            #homePage QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #e4e7ed;
-                border-radius: 12px;
-                font-size: 17px;
-                font-weight: 500;
-                color: #1a202c;
-                padding: 40px 20px;
-            }
-            #homePage QPushButton:hover {
-                background-color: #ffffff;
-                border: 2px solid #2b6ef7;
-                color: #2b6ef7;
-            }
-        """)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(16, 16, 16, 16)
+        root_layout.setSpacing(16)
 
-        main_layout = QVBoxLayout(self)
-        main_layout.setAlignment(Qt.AlignCenter)
-        main_layout.setSpacing(60)
-        main_layout.setContentsMargins(80, 80, 80, 80)
+        root_layout.addWidget(self._build_header())
+        root_layout.addWidget(self._build_body(), 1)
+        root_layout.addWidget(self._build_footer())
 
-        # ===== 标题区域：parms大标题 + v0.6小字 + 右侧logo =====
-        title_widget = QWidget()
-        title_layout = QHBoxLayout(title_widget)
-        title_layout.setSpacing(20)
-        title_layout.setAlignment(Qt.AlignCenter)
+    def _build_header(self):
+        """顶部横幅：圆形logo与文字作为一个整体水平居中"""
+        header = QWidget()
+        header.setObjectName("header")
+        header.setFixedHeight(170)
 
-        # 文字组合：parms + v0.6
-        text_group = QWidget()
-        text_layout = QHBoxLayout(text_group)
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(6)
-        text_layout.setAlignment(Qt.AlignBaseline)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(28, 0, 28, 0)
+        header_layout.setSpacing(0)
 
-        app_name = QLabel("parms")
-        app_name.setStyleSheet("""
-            font-size: 52px;
-            font-weight: bold;
-            color: #2b6ef7;
-            letter-spacing: 2px;
-        """)
-
-        version_name = QLabel("v0.6")
-        version_name.setStyleSheet("""
-            font-size: 20px;
-            font-weight: 500;
-            color: #2b6ef7;
-        """)
-
-        text_layout.addWidget(app_name)
-        text_layout.addWidget(version_name)
-
-        # 右侧logo图片，高度与parms文字匹配
         logo_label = QLabel()
+        logo_label.setFixedSize(104, 104)
         logo_path = os.path.join(base_path, "assets", "homepage.png")
         if os.path.exists(logo_path):
-            logo_pix = QPixmap(logo_path)
-            # logo高度与标题文字高度匹配，视觉上大小一致
-            scaled_logo = logo_pix.scaledToHeight(100, Qt.SmoothTransformation)
-            logo_label.setPixmap(scaled_logo)
-            logo_label.setAlignment(Qt.AlignVCenter)
+            logo_label.setPixmap(circular_pixmap(logo_path, 104))
 
-        # 左右弹簧，整体居中
-        title_layout.addStretch()
-        title_layout.addWidget(text_group)
-        title_layout.addWidget(logo_label)
-        title_layout.addStretch()
+        title_label = QLabel("模拟电路自动化设计工具")
+        title_label.setObjectName("headerTitle")
 
-        # ===== 功能卡片区域（2x2 网格） =====
-        cards_widget = QWidget()
-        cards_widget.setFixedWidth(720)
-        cards_layout = QHBoxLayout(cards_widget)
-        cards_layout.setSpacing(24)
-        cards_layout.setContentsMargins(0, 0, 0, 0)
+        version_label = QLabel("Parms")
+        version_label.setObjectName("headerSubtitle")
 
-        # 第一列
-        col1_layout = QVBoxLayout()
-        col1_layout.setSpacing(24)
+        # 副标题放在主标题正下方，两行文字居中
+        text_group = QWidget()
+        text_layout = QVBoxLayout(text_group)
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(4)
+        text_layout.addWidget(title_label, 0, Qt.AlignHCenter)
+        text_layout.addWidget(version_label, 0, Qt.AlignHCenter)
 
-        btn1 = QPushButton("⚡ 电路版图生成")
-        btn1.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        btn1.clicked.connect(self.jump_to_gen.emit)
+        header_layout.addStretch()
+        header_layout.addWidget(logo_label, 0, Qt.AlignVCenter)
+        header_layout.addSpacing(26)
+        header_layout.addWidget(text_group, 0, Qt.AlignVCenter)
+        header_layout.addStretch()
+        return header
 
-        btn2 = QPushButton("⚡ 电路参数优化")
-        btn2.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        btn2.clicked.connect(self.jump_to_opt.emit)
+    def _build_body(self):
+        """主体区域：左侧固定导航栏 + 右侧自适应图片区"""
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(16)
 
-        col1_layout.addWidget(btn1)
-        col1_layout.addWidget(btn2)
+        body_layout.addWidget(self._build_nav())
 
-        # 第二列
-        col2_layout = QVBoxLayout()
-        col2_layout.setSpacing(24)
+        content_frame = QFrame()
+        content_frame.setObjectName("contentFrame")
+        content_layout = QVBoxLayout(content_frame)
+        content_layout.setContentsMargins(2, 2, 2, 2)
+        content_layout.setSpacing(0)
+        content_layout.addWidget(
+            RoundedImage(os.path.join(base_path, "xpian.png"), radius=10)
+        )
 
-        btn3 = QPushButton("⚡ 自动布局")
-        btn3.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        btn3.clicked.connect(self.jump_to_place.emit)
+        body_layout.addWidget(content_frame, 1)
+        return body
 
-        btn4 = QPushButton("⚡ 自动布线")
-        btn4.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        btn4.clicked.connect(self.jump_to_route.emit)
+    def _build_nav(self):
+        """左侧导航栏：四个功能按钮，在整列内均匀分布"""
+        nav_bar = QWidget()
+        nav_bar.setObjectName("navBar")
+        nav_bar.setFixedWidth(280)
 
-        col2_layout.addWidget(btn3)
-        col2_layout.addWidget(btn4)
+        nav_layout = QVBoxLayout(nav_bar)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(18)
 
-        cards_layout.addLayout(col1_layout)
-        cards_layout.addLayout(col2_layout)
+        self.nav_group = QButtonGroup(self)
+        self.nav_group.setExclusive(True)
 
-        # 组装主布局：卡片水平居中
-        main_layout.addWidget(title_widget)
-        main_layout.addWidget(cards_widget, 0, Qt.AlignHCenter)
+        # 按钮之间只留固定间距，整列由按钮平分撑满，
+        # 这样四个按钮的上下边正好和右侧图片区对齐（不用弹簧，否则间隔会大到 70px 以上）
+        for text, signal_name in self.NAV_ITEMS:
+            button = QPushButton(text)
+            button.setCheckable(True)
+            button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+            button.setCursor(Qt.PointingHandCursor)
+            button.setChecked(text == self.DEFAULT_NAV)
+            button.clicked.connect(getattr(self, signal_name).emit)
+            self.nav_group.addButton(button)
+            nav_layout.addWidget(button)
+        return nav_bar
+
+    def _build_footer(self):
+        """底部页脚"""
+        footer = QLabel("版本 v0.6 | 团队：CEDA | WHUT")
+        footer.setObjectName("footer")
+        footer.setFixedHeight(36)
+        footer.setAlignment(Qt.AlignCenter)
+        return footer
 
 
 # ====================== 主窗口 ======================
@@ -222,7 +335,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("parms")
-        self.resize(1100, 850)
+        self.resize(1120, 760)
 
         self.setObjectName("parms")
 
@@ -236,7 +349,9 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # 用堆叠窗口管理器替代标签页，实现页面切换
+        # 忽略各功能页自身的尺寸要求，否则隐藏页会把主窗口顶大，1200x800 压不下去
         self.stack = QStackedWidget()
+        self.stack.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         main_layout.addWidget(self.stack)
 
         # 0号页面：主页
