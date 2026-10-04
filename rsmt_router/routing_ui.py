@@ -16,8 +16,10 @@ import random
 import time
 import io
 
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ====================== 第三方库导入 ======================
 try:
@@ -637,7 +639,7 @@ class PageRSMT(QWidget):
         finally:
             self.run_btn.setEnabled(True)
 
-# ====================== 页面2：第二步 走线合法化调整页面 ======================
+# ====================== 页面2：第二步 走线合法化调整页面（已修改） ======================
 class PageAdjust(QWidget):
     def __init__(self):
         super().__init__()
@@ -645,6 +647,8 @@ class PageAdjust(QWidget):
         self.final_steiner_trees = None
         self.result_file_path = ""
         self.save_default_name = os.path.join(BASE_DIR, "leg_cp_op2_3_result.txt")
+        # 新增：nets.txt 文件路径，默认同目录
+        self.nets_file_path = os.path.join(BASE_DIR, 'nets.txt')
         self.fig = Figure(figsize=(9, 6), dpi=100)
         self.canvas = FigureCanvas(self.fig)
         self.toolbar = NavigationToolbar(self.canvas, self)
@@ -658,11 +662,19 @@ class PageAdjust(QWidget):
         ctrl_layout = QVBoxLayout(ctrl_widget)
         ctrl_layout.setSpacing(6)
 
+        # 选择第一步结果文件
         self.select_result_btn = QPushButton("选择第一步斯坦纳森林结果文件(.txt)")
         self.select_result_btn.clicked.connect(self.load_result_file)
         self.file_tip_label = QLabel("当前加载文件：未选择")
         ctrl_layout.addWidget(self.select_result_btn)
         ctrl_layout.addWidget(self.file_tip_label)
+
+        # 新增：选择 nets.txt 文件
+        self.select_nets_btn = QPushButton("选择 nets.txt 文件")
+        self.select_nets_btn.clicked.connect(self.select_nets_file)
+        self.nets_label = QLabel(f"当前 nets 文件：{self.nets_file_path}")
+        ctrl_layout.addWidget(self.select_nets_btn)
+        ctrl_layout.addWidget(self.nets_label)
 
         self.draw_checkbox = QCheckBox("开启界面内绘图显示")
         self.draw_checkbox.setChecked(True)
@@ -706,7 +718,6 @@ class PageAdjust(QWidget):
         self.log_text.clear()
 
     def load_result_file(self):
-        # 默认打开模块目录
         path, _ = QFileDialog.getOpenFileName(self, "选择斯坦纳森林结果文件", BASE_DIR, "Text Files (*.txt);;All Files (*)")
         if not path:
             return
@@ -727,6 +738,13 @@ class PageAdjust(QWidget):
             self.log_text.append(err)
             self.status_label.setText("状态：文件加载失败")
             self.cp_op2_3 = None
+
+    # 新增：选择 nets.txt 文件
+    def select_nets_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "选择 nets.txt", BASE_DIR, "Text Files (*.txt);;All Files (*)")
+        if path:
+            self.nets_file_path = path
+            self.nets_label.setText(f"当前 nets 文件：{path}")
 
     def save_final_steiner(self):
         if self.final_steiner_trees is None:
@@ -753,6 +771,12 @@ class PageAdjust(QWidget):
             self.log_text.append(">>> 错误：请先选择并加载上一步的结果文件！")
             self.status_label.setText("状态：缺少输入数据")
             return
+        # 检查 nets 文件是否存在
+        if not os.path.exists(self.nets_file_path):
+            self.log_text.append(f">>> 错误：nets.txt 文件不存在：{self.nets_file_path}，请重新选择！")
+            self.status_label.setText("状态：nets 文件缺失")
+            return
+
         self.run_btn.setEnabled(False)
         self.status_label.setText("状态：正在执行检测与调整，请稍候...")
         self.log_text.append("\n======= 开始执行间距检测 & 走线合法化 =======")
@@ -764,29 +788,22 @@ class PageAdjust(QWidget):
             for _ in range(1000):
                 requir_adjust_trees = trees_spacing_detect(input_steiner_trees, threshold)
                 log_buffer.append(f"本轮需要调整的树对数量：{len(requir_adjust_trees)}")
-                print('需要调整的树对', requir_adjust_trees)
-                print('需要调整的树对数量',len(requir_adjust_trees))
                 if len(requir_adjust_trees) == 0:
                     break
                 elif len(requir_adjust_trees) > 0:
                     adjusted_segments1, adjusted_segments2 = adjust_segments(requir_adjust_trees[0][0:2], threshold)
                     input_steiner_trees2 = input_steiner_trees.copy()
                     if len(trees_spacing_detect(revised_steiner_trees(input_steiner_trees, requir_adjust_trees, adjusted_segments1))) < len(requir_adjust_trees):
-                        print('方案1')
                         log_buffer.append("本轮选择：方案1")
                     else:
-                        print('方案2')
                         log_buffer.append("本轮选择：方案2")
                         input_steiner_trees = revised_steiner_trees(input_steiner_trees2, requir_adjust_trees, adjusted_segments2)
             add_length = total_segment_length(input_steiner_trees) - orig_wl
-            print('合法化增加的线长', add_length)
             log_buffer.append(f"\n合法化新增总线长：{add_length:.2f}")
-            # 固定从模块目录读取nets.txt
-            file_path = os.path.join(BASE_DIR, 'nets.txt')
+            # 使用用户选择的 nets 文件路径
+            file_path = self.nets_file_path
             lists = read_file_tuple(file_path)
             OriginalPoints, steiner_points = distinguishing_point(lists, input_steiner_trees)
-            print('斯坦纳点', steiner_points)
-            print('原有点', OriginalPoints)
             log_buffer.append(f"原始引脚数量：{len(OriginalPoints)}")
             log_buffer.append(f"斯坦纳点数量：{len(steiner_points)}")
             log_buffer.append(f"斯坦纳点坐标：{steiner_points}")
@@ -888,7 +905,6 @@ class PageGDS(QWidget):
         self.log_edit.clear()
 
     def select_cp_op2_3(self):
-        # 默认打开模块目录
         path, _ = QFileDialog.getOpenFileName(self, "选择 cp_op2_3 文件", BASE_DIR, "Text Files (*.txt)")
         if not path:
             return
@@ -982,7 +998,6 @@ STRNAME: "test_struc1"
 """
             end_info = """ENDSTR
 ENDLIB"""
-            # 所有生成的文件都输出到模块目录
             routing_txt = os.path.join(BASE_DIR, 'leg_cp_op2_routing.txt')
             with open(routing_txt, 'w') as file:
                 file.write(header_info)
@@ -1071,7 +1086,6 @@ ENDEL
                 lines[last_strname_idx + 1:last_strname_idx + 1] = extracted_content
             with open(new_file_path, 'w', encoding='utf-8') as new_file:
                 new_file.writelines(lines)
-            # 输出gds文件到模块目录
             gds_routing_path = os.path.join(BASE_DIR, 'leg_cp_op2_routing.gds')
             with open(gds_routing_path, 'wb') as ofile:
                 with open(routing_txt, 'r') as ifile:
@@ -1178,8 +1192,6 @@ class RSMTRoutingWidget(QWidget):
         self.btn_page2.setStyleSheet(active_style if active_index == 1 else normal_style)
         self.btn_page3.setStyleSheet(active_style if active_index == 2 else normal_style)
 
-
-# ====================== 程序入口 ======================
 # ========== 模块独立运行调试 ==========
 if __name__ == "__main__":
     from PyQt5.QtWidgets import QMainWindow

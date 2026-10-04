@@ -1,31 +1,33 @@
 import sys
 import os
+import pickle
 import torch
 import numpy as np
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QTabWidget, QWidget,
     QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem,
-    QMessageBox, QFileDialog, QTextEdit, QFormLayout, QGroupBox, QHeaderView
+    QMessageBox, QFileDialog, QTextEdit, QFormLayout, QGroupBox, QHeaderView, QLineEdit
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QStandardItemModel, QStandardItem
 from gymnasium import spaces
+
+
+# ---------------- 资源路径辅助函数 ----------------
+def resource_path(relative_path):
+    """ 获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包 """
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_path)
+
+
 # ---------------- 全局配置 ----------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-WEIGHTS_ROOT = {
-    "DDPG": os.path.join(BASE_DIR, "saved_weights"),
-    "SAC": os.path.join(BASE_DIR, "saved_weights_sac")
-}
+BASE_DIR = resource_path('.')
 OUTPUT_DIR = os.path.join(BASE_DIR, "output_circuit")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-
-# ---------------- 关键修复：添加节点类型选择 ----------------
-NODE_TYPE_MAP = {
-    "GraphOTA": {"device": 11, "pin": 32},
-    "GraphOTA2": {"device": 19, "pin": 32},
-    "GraphOTA3": {"device": 20, "pin": 65}
-}
 
 # ---------------- 性能指标目标值配置 ----------------
 PERFORMANCE_TARGETS = {
@@ -37,71 +39,88 @@ PERFORMANCE_TARGETS = {
 }
 
 
-# ---------------- 工具函数：解析模型文件名 ----------------
+# ---------------- 工具函数：解析模型文件名（兼容新旧格式） ----------------
 def parse_model_filename(filename):
+    """
+    支持两种格式：
+    旧：Actor_GraphOTA_ActorCriticRGCN_reward=1.50.pth
+    新：DDPGAgent_GraphOTA_2025-04-17_noise=uniform_reward=1.40_ActorCriticRGCN_rew_eng=True.pkl
+    """
     result = {
         "valid": False,
-        "is_actor": False,
         "ckt_name": "",
         "gnn_model": "",
         "reward": -999,
-        "full_name": filename,
         "display_text": ""
     }
-    if not filename.endswith(".pth"):
+
+    # 只处理 .pth 或 .pkl
+    if not (filename.endswith(".pth") or filename.endswith(".pkl")):
         return result
-    parts = filename.split("_")
-    if len(parts) < 5:
+
+    # 提取文件名主体（去掉后缀）
+    name_body = filename.rsplit(".", 1)[0]
+
+    # 尝试匹配新格式：包含 ActorCritic<GNN> 和 reward=<值>
+    import re
+
+    # 查找 ActorCriticXXX
+    gnn_match = re.search(r'ActorCritic(\w+)', name_body)
+    if not gnn_match:
         return result
-    if parts[0] != "Actor":
+    gnn_model = gnn_match.group(1)
+
+    # 查找 reward=<value>
+    reward_match = re.search(r'reward=(-?[\d.]+)', name_body)
+    if not reward_match:
         return result
-    result["is_actor"] = True
-    result["ckt_name"] = parts[1]
-    gnn_part = ""
-    for part in parts:
-        if part.startswith("ActorCritic"):
-            gnn_part = part.replace("ActorCritic", "")
-            break
-    if not gnn_part:
+    try:
+        reward = float(reward_match.group(1))
+    except ValueError:
         return result
-    result["gnn_model"] = gnn_part
-    reward_val = -999
-    for part in parts:
-        if part.startswith("reward="):
-            try:
-                reward_val = float(part.split("=")[1])
-            except:
-                pass
-            break
-    result["reward"] = reward_val
-    result[
-        "display_text"] = f"Reward: {reward_val:.2f} | Circuit: {result['ckt_name']} | Model: {result['gnn_model']} | File: {filename}"
+
+    # 查找电路名：提取 Graph 开头的部分
+    ckt_match = re.search(r'(Graph\w+)', name_body)
+    if ckt_match:
+        ckt_name = ckt_match.group(1)
+    else:
+        parts = name_body.split("_")
+        if len(parts) >= 3 and parts[0] == "Actor":
+            ckt_name = parts[1]
+        else:
+            return result
+
+    display_text = f"Reward: {reward:.2f} | Circuit: {ckt_name} | Model: {gnn_model} | File: {filename}"
     result["valid"] = True
+    result["ckt_name"] = ckt_name
+    result["gnn_model"] = gnn_model
+    result["reward"] = reward
+    result["display_text"] = display_text
     return result
 
 
 # ---------------- 动态导入模块 ----------------
 def get_ckt_graph_class(name, node_type="device"):
     from ckt_graphs import GraphOTA, GraphOTA2, GraphOTA3
-
     graph_map = {
         "GraphOTA": GraphOTA,
         "GraphOTA2": GraphOTA2,
         "GraphOTA3": GraphOTA3
     }
-
-    # 直接传入node_type参数，让ckt_graphs自己初始化
     return lambda: graph_map[name](node_type=node_type)
 
 
 def get_env_class(name):
-    from ota import OTAEnv
-    from ota1 import OTAEnv1
-    env_map = {
-        "OTAEnv (原版)": OTAEnv,
-        "OTAEnv1 (加速版)": OTAEnv1
-    }
-    return env_map.get(name, OTAEnv)
+    """ 按需导入环境类，避免提前加载 ota1 及其依赖的 CSV """
+    if name == "OTAEnv (原版)":
+        from ota import OTAEnv
+        return OTAEnv
+    elif name == "OTAEnv1 (加速版)":
+        from ota1 import OTAEnv1
+        return OTAEnv1
+    else:
+        from ota import OTAEnv
+        return OTAEnv
 
 
 def get_actor_model_class(name):
@@ -115,7 +134,7 @@ def get_actor_model_class(name):
     return model_map.get(name, ActorCriticRGCN)
 
 
-# ---------------- 后台线程：策略A - 确定性推理 ----------------
+# ---------------- 后台线程：确定性推理 ----------------
 class OptimizeThread(QThread):
     update_log = pyqtSignal(str)
     update_result = pyqtSignal(dict)
@@ -140,14 +159,14 @@ class OptimizeThread(QThread):
             self.update_log.emit(f"   Agent类型: {self.config['agent_type']}")
             self.update_log.emit(f"   GNN模型: {self.config['gnn_model']}")
             self.update_log.emit(f"   环境类型: {self.config['env_type']}")
-            self.update_log.emit(f"   模型文件: {self.config['model_file']}")
+            self.update_log.emit(f"   模型文件: {os.path.basename(self.config['model_path'])}")
             self.update_log.emit("=" * 60)
 
             # 1. 导入并初始化电路图类
             CktGraphClass = get_ckt_graph_class(self.config['ckt_graph'], self.config['node_type'])
             ckt_graph = CktGraphClass()
 
-            # 2. 导入并初始化环境
+            # 2. 导入并初始化环境（按需导入）
             EnvClass = get_env_class(self.config['env_type'])
             env = EnvClass()
 
@@ -160,14 +179,51 @@ class OptimizeThread(QThread):
             ActorModelClass = get_actor_model_class(self.config['gnn_model'])
             actor = ActorModelClass.Actor(ckt_graph)
 
+            model_path = self.config['model_path']
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"模型文件不存在: {model_path}")
 
-            model_path = os.path.join(WEIGHTS_ROOT[self.config['agent_type']], self.config['model_file'])
-            self.update_log.emit(f"[INFO] 正在加载模型权重...")
-            actor.load_state_dict(torch.load(model_path, weights_only=True, map_location=ckt_graph.device))
+            # ---------- 根据文件后缀加载模型权重 ----------
+            self.update_log.emit("[INFO] 正在加载模型权重...")
+            if model_path.endswith('.pkl'):
+                # pickle 保存的完整 Agent 对象
+                with open(model_path, 'rb') as f:
+                    agent_obj = pickle.load(f)
+                if hasattr(agent_obj, 'actor'):
+                    actor.load_state_dict(agent_obj.actor.state_dict())
+                    self.update_log.emit("[INFO] 成功从 Agent 对象加载 Actor 权重")
+                elif hasattr(agent_obj, 'state_dict'):
+                    actor.load_state_dict(agent_obj.state_dict())
+                    self.update_log.emit("[INFO] 成功从 pickle state_dict 加载权重")
+                else:
+                    raise AttributeError("pickle 对象中未找到 Actor 或 state_dict")
+            elif model_path.endswith('.pth'):
+                # torch.save 的 state_dict
+                state_dict = torch.load(model_path, map_location=ckt_graph.device, weights_only=False)
+                actor.load_state_dict(state_dict)
+                self.update_log.emit("[INFO] 成功加载 torch state_dict")
+            else:
+                # 未知后缀，尝试两种方式
+                try:
+                    state_dict = torch.load(model_path, map_location=ckt_graph.device, weights_only=False)
+                    actor.load_state_dict(state_dict)
+                except Exception:
+                    with open(model_path, 'rb') as f:
+                        obj = pickle.load(f)
+                    if hasattr(obj, 'actor'):
+                        actor.load_state_dict(obj.actor.state_dict())
+                    else:
+                        raise ValueError("无法从文件中提取模型权重")
+            # ---------- 加载完成 ----------
+
             actor.eval()
 
             # 4. 获取环境初始状态
-            self.update_log.emit(f"[INFO] 正在初始化环境...")
+            self.update_log.emit("[INFO] 正在初始化环境...")
+            # 确保环境已进行初始仿真，避免 op_results 为 None
+            if not hasattr(env, 'op_results') or env.op_results is None:
+                dummy_action = np.zeros(env.action_space.shape)
+                env.step(dummy_action)
             state, _ = env.reset()
 
             from utils import ActionNormalizer
@@ -185,15 +241,13 @@ class OptimizeThread(QThread):
                 action_tensor = actor(state_tensor)
                 action_tensor = action_tensor.clamp(-1, 1)
 
-                # 反归一化回实际电路参数空间（用于UI展示）
+                # 反归一化回实际电路参数空间
                 real_action = normalizer.action(action_tensor).flatten()
-                # 对管子倍数M做取整处理
                 for i in [2, 5, 8, 11]:
                     real_action[i] = int(np.clip(real_action[i], 1, 100))
                 real_action = real_action.astype(float)
 
                 self.update_log.emit("[INFO] 正在进行电路仿真...")
-                # 传给env的是原始归一化值
                 _, reward, _, _, info = env.step(action_tensor.flatten().cpu().numpy())
 
             self.update_log.emit("")
@@ -242,13 +296,14 @@ class OptimizeThread(QThread):
             self.error_signal.emit(f"[ERROR] {str(e)}\n{traceback.format_exc()}")
 
 
-# ---------------- 主窗口 ----------------
+# ---------------- 主窗口（其余部分保持不变） ----------------
 class CircuitOptWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.optimize_thread = None
-        self.parsed_model_list = []
         self.has_valid_result = False
+        self.selected_model_path = ""
+        self.parsed_model_info = None
         self.init_ui()
 
     def init_ui(self):
@@ -274,32 +329,26 @@ class CircuitOptWindow(QWidget):
 
         self.ckt_combo = QComboBox()
         self.ckt_combo.addItems(["GraphOTA", "GraphOTA2", "GraphOTA3"])
-        self.ckt_combo.currentTextChanged.connect(self.refresh_model_list)
         config_layout.addRow("电路拓扑：", self.ckt_combo)
 
         self.node_type_combo = QComboBox()
         model = QStandardItemModel()
         device_item = QStandardItem("device级节点（器件级）")
         device_item.setData("device", Qt.UserRole)
-        device_item.setEnabled(True)
         model.appendRow(device_item)
         pin_item = QStandardItem("pin级节点")
         pin_item.setData("pin", Qt.UserRole)
-        pin_item.setEnabled(True)
         model.appendRow(pin_item)
         self.node_type_combo.setModel(model)
         self.node_type_combo.setCurrentIndex(0)
-        self.node_type_combo.currentTextChanged.connect(self.refresh_model_list)
         config_layout.addRow("节点类型：", self.node_type_combo)
 
         self.agent_combo = QComboBox()
         self.agent_combo.addItems(["DDPG", "SAC"])
-        self.agent_combo.currentTextChanged.connect(self.refresh_model_list)
         config_layout.addRow("Agent类型：", self.agent_combo)
 
         self.gnn_combo = QComboBox()
         self.gnn_combo.addItems(["RGCN", "GCN", "GAT", "MLP"])
-        self.gnn_combo.currentTextChanged.connect(self.refresh_model_list)
         config_layout.addRow("GNN模型：", self.gnn_combo)
 
         self.env_combo = QComboBox()
@@ -308,18 +357,23 @@ class CircuitOptWindow(QWidget):
 
         layout.addWidget(config_group)
 
-        model_group = QGroupBox("匹配的模型文件（仅Actor，按奖励从高到低排序）")
+        # ---------- 手动选择模型文件 ----------
+        model_group = QGroupBox("模型文件选择")
         model_layout = QVBoxLayout(model_group)
 
-        self.model_combo = QComboBox()
-        self.model_combo.setMinimumHeight(30)
-        self.model_combo.setPlaceholderText("请先选择电路、Agent、GNN模型，自动匹配对应文件")
-        model_layout.addWidget(QLabel("选择训练好的模型："))
-        model_layout.addWidget(self.model_combo)
+        file_sel_layout = QHBoxLayout()
+        self.model_path_edit = QLineEdit()
+        self.model_path_edit.setReadOnly(True)
+        self.model_path_edit.setPlaceholderText("请选择训练好的 Actor 模型文件 (.pth / .pkl)")
+        self.browse_model_btn = QPushButton("浏览...")
+        self.browse_model_btn.clicked.connect(self.browse_model_file)
+        file_sel_layout.addWidget(self.model_path_edit)
+        file_sel_layout.addWidget(self.browse_model_btn)
+        model_layout.addLayout(file_sel_layout)
 
-        refresh_btn = QPushButton("手动刷新模型列表")
-        refresh_btn.clicked.connect(self.refresh_model_list)
-        model_layout.addWidget(refresh_btn)
+        self.model_info_label = QLabel("模型信息：未选择")
+        self.model_info_label.setStyleSheet("color: #555;")
+        model_layout.addWidget(self.model_info_label)
 
         layout.addWidget(model_group)
 
@@ -347,7 +401,39 @@ class CircuitOptWindow(QWidget):
         layout.addWidget(log_group)
 
         self.tab_widget.addTab(tab, "配置")
-        self.refresh_model_list()
+
+    def browse_model_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择Actor模型文件", "",
+            "模型文件 (*.pth *.pkl);;所有文件 (*.*)"
+        )
+        if not file_path:
+            return
+
+        filename = os.path.basename(file_path)
+        parsed = parse_model_filename(filename)
+        if not parsed["valid"]:
+            QMessageBox.warning(self, "模型无效",
+                                f"文件 {filename} 无法解析，请确认文件名包含 'ActorCritic<GNN>' 和 'reward=<值>'。")
+            return
+
+        self.selected_model_path = file_path
+        self.parsed_model_info = parsed
+        self.model_path_edit.setText(file_path)
+
+        info_text = (f"电路: {parsed['ckt_name']} | GNN: {parsed['gnn_model']} | "
+                     f"Reward: {parsed['reward']:.2f}")
+        self.model_info_label.setText(info_text)
+        self.model_info_label.setStyleSheet("color: #1a73e8; font-weight: bold;")
+
+        ckt_index = self.ckt_combo.findText(parsed['ckt_name'])
+        if ckt_index >= 0:
+            self.ckt_combo.setCurrentIndex(ckt_index)
+        gnn_index = self.gnn_combo.findText(parsed['gnn_model'])
+        if gnn_index >= 0:
+            self.gnn_combo.setCurrentIndex(gnn_index)
+
+        self.log_edit.append(f"[OK] 已选择模型: {filename}")
 
     def init_result_tab(self):
         tab = QWidget()
@@ -359,38 +445,29 @@ class CircuitOptWindow(QWidget):
 
         split_layout = QHBoxLayout()
 
-        # --- 电路参数表格 ---
         param_group = QGroupBox("电路参数")
         param_layout = QVBoxLayout(param_group)
         self.param_table = QTableWidget(13, 2)
         self.param_table.setHorizontalHeaderLabels(["参数名", "值"])
-
         header = self.param_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # 第一列自适应内容
-        header.setSectionResizeMode(1, QHeaderView.Stretch)  # 第二列拉伸填充
-
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
         default_params = ["W0", "L0", "M0", "W1", "L1", "M1", "W3", "L3", "M3", "W6", "L6", "M6", "vb"]
         for i, p in enumerate(default_params):
             self.param_table.setItem(i, 0, QTableWidgetItem(p))
         param_layout.addWidget(self.param_table)
         split_layout.addWidget(param_group)
 
-        # --- 性能指标表格 ---
         perf_group = QGroupBox("电路性能指标")
         perf_layout = QVBoxLayout(perf_group)
-
         self.perf_table = QTableWidget(5, 3)
         self.perf_table.setHorizontalHeaderLabels(["指标名", "当前值", "目标值"])
-
-        # 设置性能表格列宽
         perf_header = self.perf_table.horizontalHeader()
         perf_header.setSectionResizeMode(QHeaderView.Stretch)
-
         perfs = ["Gain (dB)", "Bandwidth (Hz)", "CMRR (dB)", "PM (°)", "Reward"]
         for i, p in enumerate(perfs):
             self.perf_table.setItem(i, 0, QTableWidgetItem(p))
             target_val = PERFORMANCE_TARGETS.get(p, "-")
-            # 格式化目标值显示
             if isinstance(target_val, float) and p == "Bandwidth (Hz)":
                 target_str = f"{target_val:.0e}"
             elif isinstance(target_val, float):
@@ -398,7 +475,6 @@ class CircuitOptWindow(QWidget):
             else:
                 target_str = str(target_val)
             self.perf_table.setItem(i, 2, QTableWidgetItem(target_str))
-
         perf_layout.addWidget(self.perf_table)
         split_layout.addWidget(perf_group)
 
@@ -412,46 +488,9 @@ class CircuitOptWindow(QWidget):
 
         self.tab_widget.addTab(tab, "结果")
 
-    def refresh_model_list(self):
-        selected_ckt = self.ckt_combo.currentText()
-        index = self.node_type_combo.currentIndex()
-        selected_node_type = self.node_type_combo.itemData(index, Qt.UserRole)
-        selected_agent = self.agent_combo.currentText()
-        selected_gnn = self.gnn_combo.currentText()
-
-        weights_dir = WEIGHTS_ROOT.get(selected_agent, "")
-        self.model_combo.clear()
-        self.parsed_model_list = []
-
-        if not os.path.exists(weights_dir):
-            self.model_combo.setPlaceholderText(f"目录不存在：{weights_dir}")
-            return
-
-        valid_files = []
-        for filename in os.listdir(weights_dir):
-            parsed = parse_model_filename(filename)
-            if not parsed["valid"]:
-                continue
-            if parsed["ckt_name"] == selected_ckt and parsed["gnn_model"] == selected_gnn:
-                valid_files.append(parsed)
-
-        valid_files.sort(key=lambda x: x["reward"], reverse=True)
-        self.parsed_model_list = valid_files
-
-        if not valid_files:
-            msg = f"未找到匹配的模型文件！\n\n电路：{selected_ckt}\n节点类型：{selected_node_type}\nGNN模型：{selected_gnn}\nAgent：{selected_agent}"
-            QMessageBox.warning(self, "未找到模型", msg)
-            self.model_combo.setPlaceholderText("未找到匹配的模型文件")
-            return
-
-        for parsed in valid_files:
-            self.model_combo.addItem(parsed["display_text"], parsed["full_name"])
-
-        self.log_edit.append(f"[OK] 刷新完成，找到 {len(valid_files)} 个匹配的模型文件")
-
     def start_optimize(self):
-        if self.model_combo.count() == 0 or self.model_combo.currentData() is None:
-            QMessageBox.warning(self, "警告", "没有可选择的有效模型文件！")
+        if not self.selected_model_path:
+            QMessageBox.warning(self, "警告", "请先选择模型文件！")
             return
 
         index = self.node_type_combo.currentIndex()
@@ -463,7 +502,7 @@ class CircuitOptWindow(QWidget):
             "agent_type": self.agent_combo.currentText(),
             "gnn_model": self.gnn_combo.currentText(),
             "env_type": self.env_combo.currentText(),
-            "model_file": self.model_combo.currentData()
+            "model_path": self.selected_model_path
         }
 
         self.log_edit.clear()
@@ -490,13 +529,10 @@ class CircuitOptWindow(QWidget):
         for i, name in enumerate(param_names):
             self.param_table.setItem(i, 0, QTableWidgetItem(name))
             self.param_table.setItem(i, 1, QTableWidgetItem(f"{params[name]:.4f}"))
-
-
         self.param_table.resizeColumnsToContents()
+
         perf = result["performance"]
         perf_names = ["Gain (dB)", "Bandwidth (Hz)", "CMRR (dB)", "PM (°)", "Reward"]
-
-        # 获取目标值用于比较
         thresholds = [
             PERFORMANCE_TARGETS["Gain (dB)"],
             PERFORMANCE_TARGETS["Bandwidth (Hz)"],
@@ -504,7 +540,6 @@ class CircuitOptWindow(QWidget):
             PERFORMANCE_TARGETS["PM (°)"],
             PERFORMANCE_TARGETS["Reward"]
         ]
-
         perf_values = [
             f"{perf['Gain']:.2f}",
             f"{perf['Bandwidth']:.2e}",
@@ -514,10 +549,7 @@ class CircuitOptWindow(QWidget):
         ]
 
         for i, v in enumerate(perf_values):
-            # 设置当前值
             item_val = QTableWidgetItem(v)
-
-            # 颜色标记逻辑
             try:
                 val = float(perf[perf_names[i].split(' ')[0]]) if i < 4 else float(perf['Reward'])
                 if (i < 4 and val >= thresholds[i]) or (i == 4 and val >= 0):
@@ -526,7 +558,6 @@ class CircuitOptWindow(QWidget):
                     item_val.setBackground(QColor(255, 0, 0, 50))
             except:
                 pass
-
             self.perf_table.setItem(i, 1, item_val)
 
         self.optimize_btn.setEnabled(True)
@@ -542,13 +573,8 @@ class CircuitOptWindow(QWidget):
 
     def export_spice(self):
         if not self.has_valid_result:
-            QMessageBox.warning(
-                self,
-                "无法导出",
-                "请先点击「开始生成最优电路」，获得优化结果后再导出！"
-            )
+            QMessageBox.warning(self, "无法导出", "请先点击「开始生成最优电路」，获得优化结果后再导出！")
             return
-
         if self.param_table.rowCount() == 0 or self.param_table.item(0, 1) is None:
             QMessageBox.warning(self, "警告", "参数表格为空，请先运行优化！")
             return
@@ -574,7 +600,6 @@ class CircuitOptWindow(QWidget):
             return
 
         config = self.ckt_combo.currentText()
-
         spice_header = f"""
 * 最优电路设计 - 自动生成
 * 配置：{config} | {self.agent_combo.currentText()} | {self.gnn_combo.currentText()}
@@ -602,8 +627,19 @@ VB VB 0 {vb_val}V
 .print ac vdb(OUT) vp(OUT)
 .end
         """
-
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(spice_template)
 
         QMessageBox.information(self, "导出成功", f"SPICE网表已保存到：\n{file_path}")
+
+
+# ========== 独立调试入口 ==========
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    font = QFont("WenQuanYi Micro Hei", 10)
+    app.setFont(font)
+    window = CircuitOptWindow()
+    window.setWindowTitle("模拟电路自动优化平台")
+    window.resize(1000, 800)
+    window.show()
+    sys.exit(app.exec_())

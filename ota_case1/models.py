@@ -10,7 +10,7 @@ import torch.optim as optim
 
 from utils import trunc_normal
 
-from IPython.display import clear_output
+#from IPython.display import clear_output
 import matplotlib.pyplot as plt
 
 

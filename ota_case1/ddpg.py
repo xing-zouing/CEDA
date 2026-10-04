@@ -13,8 +13,8 @@ import torch.optim as optim
 
 from utils import trunc_normal
 
-from IPython.display import clear_output
-import matplotlib.pyplot as plt
+# from IPython.display import clear_output
+# import matplotlib.pyplot as plt
 
 class ReplayBuffer:  # 进行一个已有数据信息的缓存，缓存区的数据经过采样可以加速算法收敛
     """A simple numpy replay buffer."""
@@ -327,27 +327,27 @@ class DDPGAgent:
         ):
             t_param.data.copy_(tau * l_param.data + (1.0 - tau) * t_param.data)
 
-    def _plot(
-        self,
-        step: int,
-        scores: List[float],
-        actor_losses: List[float],
-        critic_losses: List[float],
-    ):
-        """Plot the training progresses."""
-        def subplot(loc: int, title: str, values: List[float]):
-            plt.subplot(loc)
-            plt.title(title)
-            plt.plot(values)
-
-        subplot_params = [
-            (131, f"step {step}", scores),
-            (132, "actor_loss", actor_losses),
-            (133, "critic_loss", critic_losses),
-        ]
-
-        clear_output(True)
-        plt.figure(figsize=(30, 5))
-        for loc, title, values in subplot_params:
-            subplot(loc, title, values)
-        plt.show()
+    # def _plot(
+    #     self,
+    #     step: int,
+    #     scores: List[float],
+    #     actor_losses: List[float],
+    #     critic_losses: List[float],
+    # ):
+    #     """Plot the training progresses."""
+    #     def subplot(loc: int, title: str, values: List[float]):
+    #         plt.subplot(loc)
+    #         plt.title(title)
+    #         plt.plot(values)
+    #
+    #     subplot_params = [
+    #         (131, f"step {step}", scores),
+    #         (132, "actor_loss", actor_losses),
+    #         (133, "critic_loss", critic_losses),
+    #     ]
+    #
+    #     clear_output(True)
+    #     plt.figure(figsize=(30, 5))
+    #     for loc, title, values in subplot_params:
+    #         subplot(loc, title, values)
+    #     plt.show()

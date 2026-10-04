@@ -3,6 +3,7 @@ from PyQt5.QtWidgets import (QMainWindow, QMessageBox, QFileDialog,
 from PyQt5.QtCore import Qt
 from PyQt5 import uic
 import sys,os
+from resource_utils import resource_path
 
 """内置ui
 def resource_path(relative_path):
@@ -21,7 +22,7 @@ class CircuitUI(QWidget):
     """用户界面管理类"""
     def __init__(self):
         super().__init__()
-        self.ui = uic.loadUi("device_generation/devise.ui", self)
+        self.ui = uic.loadUi(resource_path("device_generation/devise.ui"), self)
 ###
 
         self.current_subckt = ""

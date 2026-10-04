@@ -1,5 +1,5 @@
 #ann预测gm/id
-
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,11 +9,18 @@ import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-PWD = os.getcwd()
+def resource_path(relative_path):
+    """ 获取资源文件的绝对路径，兼容开发环境和 PyInstaller 打包 """
+    if getattr(sys, 'frozen', False):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_path)
+
+PWD = resource_path('.')   # 指向该脚本所在的目录
 
 # 加载数据
-df = pd.read_csv(f"{PWD}/op_data/circuit_data_case1_op_train.csv")
-
+df = pd.read_csv(os.path.join(PWD, "op_data", "circuit_data_case1_op_train.csv"))
 # 归一化到 [0, 1] 范围
 scaler_X = MinMaxScaler()
 scaler_Y = MinMaxScaler()
