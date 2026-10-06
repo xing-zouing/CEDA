@@ -10,9 +10,15 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-def plot_layout(x, y, devices, sym_pairs, x_sym, title="Layout of Devices"):
-    """可视化设备布局，显示设备、对称轴和重叠区域。"""
-    fig, ax = plt.subplots(figsize=(10, 10))
+def draw_layout_on(ax, x, y, devices, sym_pairs, x_sym, title="Layout of Devices",
+                   show_legend=True):
+    """把设备布局画到给定的 Axes 上，显示设备、对称轴和重叠区域。
+
+    与 plot_layout 的区别是这里不创建 figure、也不弹窗，
+    方便嵌入到 Qt 界面里的内嵌画布上。
+
+    show_legend=False 时不画图例，交给调用方统一放一个（左右并排两幅图时用）。
+    """
     for i, dev in enumerate(devices):
         xi, yi = x[i], y[i]
         wi, hi = dev['width'], dev['height']
@@ -50,10 +56,17 @@ def plot_layout(x, y, devices, sym_pairs, x_sym, title="Layout of Devices"):
     ax.set_xlabel('X Coordinate')
     ax.set_ylabel('Y Coordinate')
     ax.set_title(title)
-    ax.legend()
-    ax.grid(True)
+    if show_legend:
+        ax.legend()
     ax.set_aspect('equal')
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(y_min, y_max)
-    plt.grid(False)
+    # 原实现在结尾是 ax.grid(True) 之后又 plt.grid(False)，净效果为不显示网格，
+    # 这里直接不画网格，保持和原来完全一样的观感
+
+
+def plot_layout(x, y, devices, sym_pairs, x_sym, title="Layout of Devices"):
+    """在独立的 matplotlib 窗口中显示布局（保持原有行为，供 test.py 等沿用）"""
+    fig, ax = plt.subplots(figsize=(10, 10))
+    draw_layout_on(ax, x, y, devices, sym_pairs, x_sym, title)
     plt.show()

@@ -22,7 +22,8 @@ def optimize_layout(
         max_overlap_percent=2.0,
         max_symmetry_error=0.1,
         max_oob_penalty=0.1,
-        plot_intermediate=True
+        plot_intermediate=True,
+        plot_callback=None
 ):
     """
     模拟电路共质心布局优化函数（100%复刻原始代码行为）
@@ -36,7 +37,24 @@ def optimize_layout(
     - max_overlap_percent: 最大允许重叠百分比，默认2.0%
     - max_symmetry_error: 最大允许对称性误差，默认0.1
     - max_oob_penalty: 最大允许边界越界惩罚，默认0.1
+    - plot_callback: 可选的布局图回调，签名
+      (kind, x, y, devices, sym_pairs, x_sym, title)；kind 为
+      "initial" / "intermediate" / "final"。传了它就不再弹 matplotlib 窗口。
+
+    注意：plot_callback 会在调用方的线程里被调用（界面是用后台线程跑的），
+    所以回调本身必须是线程安全的——不要在里面碰 Qt 控件。
     """
+
+    def emit_plot(kind, x, y, devices, sym_pairs, x_sym, title, announce=None):
+        """出图：有回调就交给外部渲染，否则退回原来的 matplotlib 弹窗"""
+        if plot_callback is None and not plot_intermediate:
+            return
+        if announce:
+            print(announce)
+        if plot_callback is not None:
+            plot_callback(kind, x, y, devices, sym_pairs, x_sym, title)
+        else:
+            plot_layout(x, y, devices, sym_pairs, x_sym, title=title)
     # 解析网表和对称文件（与原始代码完全一致）
     devices, nets, device_name_to_index, logical_groups = parse_spice_netlist(netlist_file)
     sym_pairs, cc_pairs = parse_sym_file(sym_file, device_name_to_index)
@@ -121,10 +139,9 @@ def optimize_layout(
     start_time = time.time()
     in_first_stage = True
 
-    if plot_intermediate:
-        print("初始布局:")
-        plot_layout(x.detach().cpu().numpy(), y.detach().cpu().numpy(), devices, sym_pairs, params['x_sym'],
-                    title="Initial Device Layout")
+    emit_plot("initial", x.detach().cpu().numpy(), y.detach().cpu().numpy(),
+              devices, sym_pairs, params['x_sym'],
+              "Initial Device Layout", "初始布局:")
 
     for step in range(params['max_steps']):
         optimizer.zero_grad()
@@ -149,10 +166,10 @@ def optimize_layout(
                     lambda_overlap_current * overlap_penalty)
         else:
             # 第二阶段：优化所有目标
-            if in_first_stage and plot_intermediate:
-                print("第一阶段结束时的布局:")
-                plot_layout(x.detach().cpu().numpy(), y.detach().cpu().numpy(), devices, sym_pairs, params['x_sym'],
-                            title="Layout at the End of First Stage")
+            if in_first_stage:
+                emit_plot("intermediate", x.detach().cpu().numpy(), y.detach().cpu().numpy(),
+                          devices, sym_pairs, params['x_sym'],
+                          "Layout at the End of First Stage", "第一阶段结束时的布局:")
                 in_first_stage = False
             loss = (beta_hpwl_current * hpwl +
                     lambda_overlap_current * overlap_penalty +
@@ -247,7 +264,6 @@ def optimize_layout(
     x = v[::2].detach().cpu().numpy()
     y = v[1::2].detach().cpu().numpy()
 
-    if plot_intermediate:
-        plot_layout(x, y, devices, sym_pairs, params['x_sym'], title="Final Device Layout")
+    emit_plot("final", x, y, devices, sym_pairs, params['x_sym'], "Final Device Layout")
 
     return x, y

@@ -222,7 +222,6 @@ class HomePage(QWidget):
         ("电路参数优化", "jump_to_opt"),
         ("自动布线", "jump_to_route"),
     )
-    DEFAULT_NAV = "自动布局"  # 默认选中的导航项
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -315,11 +314,18 @@ class HomePage(QWidget):
             button.setCheckable(True)
             button.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
             button.setCursor(Qt.PointingHandCursor)
-            button.setChecked(text == self.DEFAULT_NAV)
             button.clicked.connect(getattr(self, signal_name).emit)
             self.nav_group.addButton(button)
             nav_layout.addWidget(button)
         return nav_bar
+
+    def clear_nav_selection(self):
+        """取消导航栏的选中态：避免看起来像默认选中了某一项"""
+        # 互斥的 QButtonGroup 不允许直接取消选中，得先临时关掉互斥
+        self.nav_group.setExclusive(False)
+        for button in self.nav_group.buttons():
+            button.setChecked(False)
+        self.nav_group.setExclusive(True)
 
     def _build_footer(self):
         """底部页脚"""
@@ -328,6 +334,20 @@ class HomePage(QWidget):
         footer.setFixedHeight(36)
         footer.setAlignment(Qt.AlignCenter)
         return footer
+
+
+# ====================== 顶部菜单栏 ======================
+# (菜单名, [条目, ...])，条目为 None 表示分隔线。
+# 目前只做展示，条目都还没接实际功能。
+MENU_ITEMS = (
+    ("文件（F）", ("打开网表…", "打开结果目录", None, "退出")),
+    ("编辑（E）", ("撤销", "重做", None, "清除执行日志")),
+    ("构建（B）", ("一键运行全部流程", None, "网表转 DGL 图", "提取匹配约束",
+                  "运行自动布局优化", "运行自动布线")),
+    ("工具（T）", ("打开工作目录", None, "首选项…")),
+    ("窗口（W）", ("主页", None, "电路版图生成", "电路参数优化", "自动布局", "自动布线")),
+    ("帮助（H）", ("使用说明", None, "关于 parms")),
+)
 
 
 # ====================== 主窗口 ======================
@@ -339,8 +359,52 @@ class MainWindow(QMainWindow):
 
         self.setObjectName("parms")
 
-        # 设置整体浅色背景
-        self.setStyleSheet("QMainWindow { background-color: #f5f7fa; }")
+        # 整体浅色背景 + 菜单栏/下拉菜单样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f7fa;
+            }
+            QMenuBar {
+                background-color: #e9edf2;
+                border-bottom: 1px solid #dcdfe6;
+                padding: 2px 6px;
+                font-size: 13px;
+                color: #303133;
+            }
+            QMenuBar::item {
+                background: transparent;
+                color: #303133;
+                padding: 5px 5px;
+                border-radius: 6px;
+            }
+            QMenuBar::item:selected, QMenuBar::item:pressed {
+                background-color: #dbeafe;
+                color: #1e3a8a;
+            }
+            QMenu {
+                background-color: #ffffff;
+                border: 1px solid #e4e7ed;
+                border-radius: 8px;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 6px 26px 6px 16px;
+                border-radius: 6px;
+                color: #303133;
+            }
+            QMenu::item:selected {
+                background-color: #dbeafe;
+                color: #1e3a8a;
+            }
+            QMenu::separator {
+                height: 1px;
+                background-color: #e4e7ed;
+                margin: 4px 8px;
+            }
+        """)
+
+        self.build_menu_bar()
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -366,6 +430,20 @@ class MainWindow(QMainWindow):
 
         # 初始化四个功能页（首次进入时会重新创建，保证刷新）
         self._init_function_pages()
+
+    def build_menu_bar(self):
+        """顶部菜单栏：目前只展示，条目还没接实际功能"""
+        menu_bar = self.menuBar()
+        # 强制用窗口内菜单栏，免得某些桌面环境把它挪到系统全局顶栏去
+        menu_bar.setNativeMenuBar(False)
+
+        for title, items in MENU_ITEMS:
+            menu = menu_bar.addMenu(title)
+            for text in items:
+                if text is None:
+                    menu.addSeparator()
+                else:
+                    menu.addAction(text)
 
     def _init_function_pages(self):
         """初始化/刷新四个功能页面，每次调用都会重新创建实例，清空所有参数"""
@@ -407,6 +485,8 @@ class MainWindow(QMainWindow):
 
     def go_back_home(self):
         """返回主页"""
+        # 回到主页时清掉导航栏的加深状态，只有刚点下去那一下才高亮
+        self.home_page.clear_nav_selection()
         self.stack.setCurrentIndex(0)
 
     def create_empty_page(self, title, message):
@@ -432,7 +512,7 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     icon_path = os.path.join(base_path, "assets", "image.png")
-    print(icon_path)
+    #print(icon_path)
     app = QApplication(sys.argv)
     app.setApplicationName("parms")
     app.setApplicationDisplayName("parms")

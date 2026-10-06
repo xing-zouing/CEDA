@@ -1,13 +1,22 @@
 import sys
 import os
 import time
+import traceback
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QGroupBox, QFormLayout, QLineEdit, QLabel, QFileDialog,
-    QTextEdit, QSpinBox, QDoubleSpinBox
+    QTextEdit, QSpinBox, QDoubleSpinBox, QStackedWidget,
+    QScrollArea, QFrame
 )
 from PyQt5.QtGui import QFont, QTextCursor
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+
+import matplotlib
+
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
+from matplotlib.figure import Figure
 
 # 获取当前文件所在目录，用于临时切换工作目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -17,91 +26,294 @@ import sys
 
 sys.path.append(os.path.join(BASE_DIR, "DGL_build"))
 
+# 后台线程的存活引用。页面切换时 AutoLayoutWindow 会被销毁，
+# 若 QThread 还挂在它下面会直接崩，所以放模块级集合里托管，线程跑完再移除。
+_ACTIVE_WORKERS = set()
+
+# matplotlib 的字体扫描认不出 .ttc，字体缓存里没有文泉驿，图上写中文会变方块。
+# 这里按路径手动注册一份，只用在需要中文的那几处，不改全局 rcParams
+# （其他模块 ota_case1 / rsmt_router 也在用 matplotlib，改全局会影响它们的图）。
+_CJK_FONT_PATHS = (
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+)
+_cjk_font_prop = None
+_cjk_font_loaded = False
+
+# 与主页同一套蓝色配色：主色 #2b6ef7 / 深色 #1e3a8a / 浅色 #dbeafe
+PAGE_STYLE = """
+#page {
+    background-color: #f5f7fa;
+}
+
+QGroupBox {
+    background-color: #ffffff;
+    border: 1px solid #e4e7ed;
+    border-radius: 10px;
+    margin-top: 13px;
+    padding: 10px 8px 8px 8px;
+    font-size: 13px;
+    font-weight: bold;
+    color: #1e3a8a;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 0 6px;
+}
+
+QLabel {
+    color: #606266;
+    font-size: 12px;
+    font-weight: normal;
+}
+
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background-color: #ffffff;
+    border: 1px solid #dcdfe6;
+    border-radius: 6px;
+    min-height: 20px;
+    color: #1a202c;
+    font-size: 12px;
+    selection-background-color: #2b6ef7;
+    selection-color: #ffffff;
+}
+QLineEdit {
+    padding: 4px 8px;
+}
+/* 数字框右侧得给上下箭头留出固定宽度，否则箭头会被 padding 挤变形 */
+QSpinBox, QDoubleSpinBox {
+    padding: 4px 2px 4px 8px;
+}
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    margin: 1px 1px 0 0;
+    border-left: 1px solid #e4e7ed;
+    border-top-right-radius: 5px;
+    background-color: #f5f7fa;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    margin: 0 1px 1px 0;
+    border-left: 1px solid #e4e7ed;
+    border-bottom-right-radius: 5px;
+    background-color: #f5f7fa;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #dbeafe;
+}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    width: 7px;
+    height: 7px;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+    border-color: #2b6ef7;
+}
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background-color: #f5f7fa;
+    color: #a8abb2;
+}
+
+QPushButton {
+    background-color: #f5f7fa;
+    border: 1px solid #dcdfe6;
+    border-radius: 6px;
+    padding: 5px 14px;
+    color: #606266;
+    font-size: 12px;
+}
+QPushButton:hover {
+    background-color: #ecf5ff;
+    border-color: #2b6ef7;
+    color: #2b6ef7;
+}
+QPushButton:pressed {
+    background-color: #dbeafe;
+}
+QPushButton:disabled {
+    background-color: #f5f7fa;
+    border-color: #e4e7ed;
+    color: #a8abb2;
+}
+
+/* 主操作按钮：开始自动布局优化（浅蓝，不抢眼） */
+QPushButton#primaryButton {
+    background-color: #dbeafe;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    color: #1e3a8a;
+    font-size: 13px;
+    font-weight: bold;
+    padding: 6px 22px;
+}
+QPushButton#primaryButton:hover {
+    background-color: #bfdbfe;
+    border-color: #93c5fd;
+}
+QPushButton#primaryButton:pressed {
+    background-color: #a9cefd;
+}
+QPushButton#primaryButton:disabled {
+    background-color: #eef4ff;
+    border-color: #dbeafe;
+    color: #a8abb2;
+}
+
+/* 顶部入口 / 返回按钮：和主页导航按钮同色系 */
+QPushButton#entryButton {
+    background-color: #dbeafe;
+    border: none;
+    border-radius: 8px;
+    color: #1e3a8a;
+    font-size: 12px;
+    font-weight: bold;
+    padding: 6px 14px;
+}
+QPushButton#entryButton:hover {
+    background-color: #bfdbfe;
+}
+QPushButton#entryButton:pressed {
+    background-color: #bfdbfe;
+}
+
+QTextEdit {
+    background-color: #fbfcfe;
+    border: 1px solid #e4e7ed;
+    border-radius: 8px;
+    padding: 4px 6px;
+    font-family: "WenQuanYi Micro Hei", monospace;
+    font-size: 11px;
+    color: #475569;
+}
+"""
+
+
+def cjk_font_properties():
+    """返回文泉驿字体的 FontProperties；系统里没有就返回 None"""
+    global _cjk_font_prop, _cjk_font_loaded
+    if not _cjk_font_loaded:
+        _cjk_font_loaded = True
+        from matplotlib import font_manager
+        for path in _CJK_FONT_PATHS:
+            if os.path.exists(path):
+                font_manager.fontManager.addfont(path)
+                _cjk_font_prop = font_manager.FontProperties(fname=path)
+                break
+    return _cjk_font_prop
+
+
+class LayoutWorker(QThread):
+    """后台执行自动布局优化，避免十几秒的计算把界面卡死"""
+
+    # 布局图数据：{kind, x, y, devices, sym_pairs, x_sym, title}
+    figure_ready = pyqtSignal(object)
+    succeeded = pyqtSignal(object, object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, params, parent=None):
+        super().__init__(parent)
+        self.params = params
+
+    def _on_plot(self, kind, x, y, devices, sym_pairs, x_sym, title):
+        # 本方法运行在工作线程里，只允许发信号，
+        # 不能碰任何 Qt 控件或 matplotlib canvas
+        self.figure_ready.emit({
+            "kind": kind,
+            "x": x,
+            "y": y,
+            "devices": devices,
+            "sym_pairs": sym_pairs,
+            "x_sym": x_sym,
+            "title": title,
+        })
+
+    def run(self):
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(BASE_DIR)
+
+            # 导入布局函数
+            from LAYOUT import optimize_layout
+
+            x, y = optimize_layout(plot_callback=self._on_plot,
+                                   plot_intermediate=False,
+                                   **self.params)
+            self.succeeded.emit(x, y)
+        except Exception:
+            self.failed.emit(traceback.format_exc())
+        finally:
+            os.chdir(original_cwd)
+
 
 class AutoLayoutWindow(QWidget):
     def __init__(self):
         super().__init__()
+        self.worker = None
+        self.start_time = 0.0
         self.init_ui()
 
     def init_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(15)
+        self.setStyleSheet(PAGE_STYLE)
 
-        # ==================== 步骤1：CDL/SP网表转DGL图 ====================
-        step1_group = QGroupBox("步骤1：CDL/SP网表 → DGL图文件")
-        step1_layout = QFormLayout(step1_group)
-        step1_layout.setSpacing(10)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
-        # 输入网表文件
-        self.cdl_input_edit = QLineEdit()
-        self.cdl_input_edit.setPlaceholderText("选择CDL或SP格式的网表文件")
-        cdl_browse_btn = QPushButton("浏览")
-        cdl_browse_btn.clicked.connect(self.select_cdl_file)
+        # 0号页：步骤3（主页面）  1号页：步骤1 + 步骤2
+        # 页面内容比主窗口高，套一层滚动区，窗口小了也不会把控件裁掉
+        self.stack = QStackedWidget()
+        outer_layout.addWidget(self.stack)
+        self.stack.addWidget(self.make_scrollable(self.build_main_page()))
+        self.stack.addWidget(self.make_scrollable(self.build_preprocess_page()))
+        self.stack.setCurrentIndex(0)
 
-        cdl_input_layout = QHBoxLayout()
-        cdl_input_layout.addWidget(self.cdl_input_edit)
-        cdl_input_layout.addWidget(cdl_browse_btn)
-        step1_layout.addRow("输入网表：", cdl_input_layout)
+    @staticmethod
+    def make_scrollable(inner):
+        """把页面包进滚动区：空间够就撑满，不够就出滚动条"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(inner)
+        return scroll
 
-        # 输出DGL文件
-        self.dgl_output_edit = QLineEdit()
-        self.dgl_output_edit.setPlaceholderText("选择DGL文件保存路径")
-        dgl_browse_btn = QPushButton("浏览")
-        dgl_browse_btn.clicked.connect(self.select_dgl_save_file)
+    # ==================== 主页面（步骤3 + 布局图 + 日志） ====================
+    def build_main_page(self):
+        page = QWidget()
+        page.setObjectName("page")
+        page_layout = QVBoxLayout(page)
+        # 上下留白压紧，把高度让给布局图
+        page_layout.setContentsMargins(14, 10, 14, 10)
+        page_layout.setSpacing(9)
 
-        dgl_output_layout = QHBoxLayout()
-        dgl_output_layout.addWidget(self.dgl_output_edit)
-        dgl_output_layout.addWidget(dgl_browse_btn)
-        step1_layout.addRow("输出DGL：", dgl_output_layout)
+        # 顶部入口：进入网表处理（步骤1/2）
+        top_bar = QHBoxLayout()
+        self.preprocess_btn = QPushButton("网表处理 →")
+        self.preprocess_btn.setObjectName("entryButton")
+        self.preprocess_btn.setMinimumHeight(30)
+        self.preprocess_btn.setCursor(Qt.PointingHandCursor)
+        self.preprocess_btn.clicked.connect(lambda: self.stack.setCurrentIndex(1))
+        top_bar.addWidget(self.preprocess_btn)
+        top_bar.addStretch()
+        page_layout.addLayout(top_bar)
 
-        # 转换按钮
-        self.convert_btn = QPushButton("开始转换为DGL图")
-        self.convert_btn.setMinimumHeight(35)
-        self.convert_btn.clicked.connect(self.convert_to_dgl)
-        step1_layout.addRow(self.convert_btn)
+        page_layout.addWidget(self.build_step3_group())
+        page_layout.addWidget(self.build_figure_group(), 1)
+        page_layout.addWidget(self.build_log_group())
+        return page
 
-        main_layout.addWidget(step1_group)
-
-        # ==================== 步骤2：DGL图提取匹配约束 ====================
-        step2_group = QGroupBox("步骤2：DGL图 → 匹配约束文件(.sym)")
-        step2_layout = QFormLayout(step2_group)
-        step2_layout.setSpacing(10)
-
-        # 输入DGL文件
-        self.dgl_input_edit = QLineEdit()
-        self.dgl_input_edit.setPlaceholderText("选择DGL图文件")
-        dgl_input_browse_btn = QPushButton("浏览")
-        dgl_input_browse_btn.clicked.connect(self.select_dgl_file)
-
-        dgl_input_layout = QHBoxLayout()
-        dgl_input_layout.addWidget(self.dgl_input_edit)
-        dgl_input_layout.addWidget(dgl_input_browse_btn)
-        step2_layout.addRow("输入DGL：", dgl_input_layout)
-
-        # 输入原网表文件
-        self.netlist_input_edit = QLineEdit()
-        self.netlist_input_edit.setPlaceholderText("选择对应的原始网表文件")
-        netlist_browse_btn = QPushButton("浏览")
-        netlist_browse_btn.clicked.connect(self.select_netlist_file)
-
-        netlist_input_layout = QHBoxLayout()
-        netlist_input_layout.addWidget(self.netlist_input_edit)
-        netlist_input_layout.addWidget(netlist_browse_btn)
-        step2_layout.addRow("原始网表：", netlist_input_layout)
-
-        # 提取约束按钮
-        self.extract_btn = QPushButton("提取匹配约束并生成.sym文件")
-        self.extract_btn.setMinimumHeight(35)
-        self.extract_btn.clicked.connect(self.extract_constraint)
-        step2_layout.addRow(self.extract_btn)
-
-        main_layout.addWidget(step2_group)
-
-        # ==================== 步骤3：运行自动布局优化 ====================
-        step3_group = QGroupBox("步骤3：运行自动布局优化")
+    def build_step3_group(self):
+        """步骤3：运行自动布局优化"""
+        step3_group = QGroupBox("运行自动布局优化")
         step3_layout = QFormLayout(step3_group)
-        step3_layout.setSpacing(10)
+        step3_layout.setSpacing(6)
+        step3_layout.setContentsMargins(9, 6, 9, 8)
 
         # 输入带约束的网表
         self.layout_netlist_edit = QLineEdit()
@@ -197,33 +409,147 @@ class AutoLayoutWindow(QWidget):
 
         step3_layout.addRow("约束参数：", param_row3)
 
-        # 运行布局按钮
+        # 运行布局按钮：左右留弹簧，按内容宽度居中，不拉满整行
         self.layout_btn = QPushButton("开始自动布局优化")
-        self.layout_btn.setMinimumHeight(40)
-        self.layout_btn.setFont(QFont("WenQuanYi Micro Hei", 12, QFont.Bold))
+        self.layout_btn.setObjectName("primaryButton")
+        self.layout_btn.setMinimumHeight(34)
+        self.layout_btn.setMinimumWidth(180)
+        self.layout_btn.setCursor(Qt.PointingHandCursor)
         self.layout_btn.clicked.connect(self.run_layout)
-        step3_layout.addRow(self.layout_btn)
 
-        main_layout.addWidget(step3_group)
+        run_row = QHBoxLayout()
+        run_row.addStretch()
+        run_row.addWidget(self.layout_btn)
+        run_row.addStretch()
+        step3_layout.addRow(run_row)
 
-        # ==================== 日志输出区域 ====================
+        return step3_group
+
+    def build_figure_group(self):
+        """布局图：左右两幅内嵌画布，左边初始布局、右边最终布局"""
+        figure_group = QGroupBox("布局图")
+        figure_layout = QVBoxLayout(figure_group)
+        figure_layout.setContentsMargins(6, 6, 6, 6)
+        figure_layout.setSpacing(0)
+
+        self.figure = Figure(figsize=(8, 3.6))
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setMinimumHeight(300)
+        figure_layout.addWidget(self.canvas)
+
+        self.ax_initial = self.figure.add_subplot(1, 2, 1)
+        self.ax_final = self.figure.add_subplot(1, 2, 2)
+        self.reset_figure()
+        return figure_group
+
+    def build_log_group(self):
+        """执行日志：高度压小，把空间让给布局图"""
         log_group = QGroupBox("执行日志")
         log_layout = QVBoxLayout(log_group)
 
         self.log_edit = QTextEdit()
         self.log_edit.setReadOnly(True)
-        self.log_edit.setMinimumHeight(220)
-        self.log_edit.setPlaceholderText("执行日志会显示在这里...")
-        self.log_edit.setStyleSheet("""
-            QTextEdit {
-                font-family: "WenQuanYi Micro Hei", monospace;
-                font-size: 11px;
-                line-height: 1.4;
-            }
-        """)
+        self.log_edit.setMinimumHeight(70)
+        self.log_edit.setMaximumHeight(100)
+        # 样式统一放在 PAGE_STYLE 里（控件自带的样式表会盖掉父级的，所以这里不单独设）
         log_layout.addWidget(self.log_edit)
 
-        main_layout.addWidget(log_group)
+        return log_group
+
+    # ==================== 子页面（步骤1 + 步骤2） ====================
+    def build_preprocess_page(self):
+        page = QWidget()
+        page.setObjectName("page")
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(14, 10, 14, 10)
+        page_layout.setSpacing(9)
+
+        top_bar = QHBoxLayout()
+        back_btn = QPushButton("← 返回")
+        back_btn.setObjectName("entryButton")
+        back_btn.setMinimumHeight(30)
+        back_btn.setCursor(Qt.PointingHandCursor)
+        back_btn.clicked.connect(lambda: self.stack.setCurrentIndex(0))
+        top_bar.addWidget(back_btn)
+        top_bar.addStretch()
+        page_layout.addLayout(top_bar)
+
+        page_layout.addWidget(self.build_step1_group())
+        page_layout.addWidget(self.build_step2_group())
+        page_layout.addStretch()
+        return page
+
+    def build_step1_group(self):
+        """步骤1：CDL/SP网表转DGL图"""
+        step1_group = QGroupBox("CDL/SP网表 → DGL图文件")
+        step1_layout = QFormLayout(step1_group)
+        step1_layout.setSpacing(10)
+
+        # 输入网表文件
+        self.cdl_input_edit = QLineEdit()
+        self.cdl_input_edit.setPlaceholderText("选择CDL或SP格式的网表文件")
+        cdl_browse_btn = QPushButton("浏览")
+        cdl_browse_btn.clicked.connect(self.select_cdl_file)
+
+        cdl_input_layout = QHBoxLayout()
+        cdl_input_layout.addWidget(self.cdl_input_edit)
+        cdl_input_layout.addWidget(cdl_browse_btn)
+        step1_layout.addRow("输入网表：", cdl_input_layout)
+
+        # 输出DGL文件
+        self.dgl_output_edit = QLineEdit()
+        self.dgl_output_edit.setPlaceholderText("选择DGL文件保存路径")
+        dgl_browse_btn = QPushButton("浏览")
+        dgl_browse_btn.clicked.connect(self.select_dgl_save_file)
+
+        dgl_output_layout = QHBoxLayout()
+        dgl_output_layout.addWidget(self.dgl_output_edit)
+        dgl_output_layout.addWidget(dgl_browse_btn)
+        step1_layout.addRow("输出DGL：", dgl_output_layout)
+
+        # 转换按钮
+        self.convert_btn = QPushButton("开始转换为DGL图")
+        self.convert_btn.setMinimumHeight(35)
+        self.convert_btn.clicked.connect(self.convert_to_dgl)
+        step1_layout.addRow(self.convert_btn)
+
+        return step1_group
+
+    def build_step2_group(self):
+        """步骤2：DGL图提取匹配约束"""
+        step2_group = QGroupBox("DGL图 → 匹配约束文件(.sym)")
+        step2_layout = QFormLayout(step2_group)
+        step2_layout.setSpacing(10)
+
+        # 输入DGL文件
+        self.dgl_input_edit = QLineEdit()
+        self.dgl_input_edit.setPlaceholderText("选择DGL图文件")
+        dgl_input_browse_btn = QPushButton("浏览")
+        dgl_input_browse_btn.clicked.connect(self.select_dgl_file)
+
+        dgl_input_layout = QHBoxLayout()
+        dgl_input_layout.addWidget(self.dgl_input_edit)
+        dgl_input_layout.addWidget(dgl_input_browse_btn)
+        step2_layout.addRow("输入DGL：", dgl_input_layout)
+
+        # 输入原网表文件
+        self.netlist_input_edit = QLineEdit()
+        self.netlist_input_edit.setPlaceholderText("选择对应的原始网表文件")
+        netlist_browse_btn = QPushButton("浏览")
+        netlist_browse_btn.clicked.connect(self.select_netlist_file)
+
+        netlist_input_layout = QHBoxLayout()
+        netlist_input_layout.addWidget(self.netlist_input_edit)
+        netlist_input_layout.addWidget(netlist_browse_btn)
+        step2_layout.addRow("原始网表：", netlist_input_layout)
+
+        # 提取约束按钮
+        self.extract_btn = QPushButton("提取匹配约束并生成.sym文件")
+        self.extract_btn.setMinimumHeight(35)
+        self.extract_btn.clicked.connect(self.extract_constraint)
+        step2_layout.addRow(self.extract_btn)
+
+        return step2_group
 
     # ==================== 文件选择槽函数 ====================
     def select_cdl_file(self):
@@ -307,6 +633,60 @@ class AutoLayoutWindow(QWidget):
         """恢复按钮为正常状态"""
         button.setEnabled(True)
         button.setText(original_text)
+
+    # ==================== 布局图绘制（只在GUI线程执行） ====================
+    def reset_figure(self):
+        """清空左右两幅图，各放一句提示"""
+        self.draw_panel_placeholder(self.ax_initial, "初始布局")
+        self.draw_panel_placeholder(self.ax_final, "最终布局")
+        self.layout_figure()
+        self.canvas.draw_idle()
+
+    def draw_panel_placeholder(self, ax, title):
+        ax.clear()
+        ax.set_title(title, fontsize=11, color="#94a3b8",
+                     fontproperties=cjk_font_properties())
+        ax.text(0.5, 0.5, "等待运行…", ha="center", va="center", fontsize=10,
+                color="#cbd5e0", fontproperties=cjk_font_properties())
+        ax.set_axis_off()
+
+    def draw_panel(self, ax, payload):
+        """把一帧布局图画到指定的那一幅里"""
+        # 懒导入：LAYOUT.visualization 会连带拉起 torch（约2秒），
+        # 不放在模块顶层以免拖慢整个程序的启动
+        from LAYOUT.visualization import draw_layout_on
+
+        ax.clear()
+        ax.set_axis_on()
+        draw_layout_on(ax, payload["x"], payload["y"], payload["devices"],
+                       payload["sym_pairs"], payload["x_sym"], payload["title"],
+                       show_legend=False)
+        self.layout_figure()
+        self.canvas.draw_idle()
+
+    def layout_figure(self):
+        """两幅图共用一个图例，放到整张图下方，免得压住器件"""
+        handles, labels = self.ax_initial.get_legend_handles_labels()
+        if not handles:
+            handles, labels = self.ax_final.get_legend_handles_labels()
+
+        for legend in list(self.figure.legends):
+            legend.remove()
+        if handles:
+            self.figure.legend(handles, labels, loc="lower center", ncol=3,
+                               frameon=False, fontsize=9)
+
+        self.figure.subplots_adjust(left=0.06, right=0.99, top=0.90,
+                                    bottom=0.16 if handles else 0.06,
+                                    wspace=0.16)
+
+    def on_figure_ready(self, payload):
+        """工作线程每画一张图就会发一次信号"""
+        # 中间那张“第一阶段结束”的图不显示
+        if payload["kind"] == "initial":
+            self.draw_panel(self.ax_initial, payload)
+        elif payload["kind"] == "final":
+            self.draw_panel(self.ax_final, payload)
 
     # ==================== 执行槽函数 ====================
     def convert_to_dgl(self):
@@ -421,19 +801,9 @@ class AutoLayoutWindow(QWidget):
             self.append_log("=" * 70 + "\n")
 
     def run_layout(self):
-        """步骤3：运行自动布局"""
+        """步骤3：运行自动布局（放到后台线程，界面不卡）"""
         netlist_path = self.layout_netlist_edit.text().strip()
         sym_path = self.sym_input_edit.text().strip()
-
-        # 获取所有UI参数
-        target_area = self.target_area_spin.value()
-        max_steps = self.max_steps_spin.value()
-        tmoc_weight = self.tmoc_weight_spin.value()
-        symmetry_weight = self.symmetry_weight_spin.value()
-        hpwl_weight = self.hpwl_weight_spin.value()
-        max_overlap_percent = self.max_overlap_spin.value()
-        max_symmetry_error = self.max_symmetry_error_spin.value()
-        max_oob_penalty = self.max_oob_penalty_spin.value()
 
         if not netlist_path or not os.path.exists(netlist_path):
             self.append_log("请选择有效的带约束网表文件", "error")
@@ -443,63 +813,67 @@ class AutoLayoutWindow(QWidget):
             self.append_log("请选择有效的约束文件", "error")
             return
 
-        # 设置按钮为运行中状态
-        self.set_button_running(self.layout_btn, "正在进行自动布局优化...")
+        if self.worker is not None and self.worker.isRunning():
+            self.append_log("布局优化正在运行中，请等待完成", "warning")
+            return
+
+        # 获取所有UI参数
+        params = dict(
+            netlist_file=netlist_path,
+            sym_file=sym_path,
+            target_area=self.target_area_spin.value(),
+            max_steps=self.max_steps_spin.value(),
+            tmoc_weight=self.tmoc_weight_spin.value(),
+            symmetry_weight=self.symmetry_weight_spin.value(),
+            hpwl_weight=self.hpwl_weight_spin.value(),
+            max_overlap_percent=self.max_overlap_spin.value(),
+            max_symmetry_error=self.max_symmetry_error_spin.value(),
+            max_oob_penalty=self.max_oob_penalty_spin.value(),
+        )
 
         self.append_log("=" * 70)
         self.append_log("开始自动布局优化", "info")
         self.append_log(f"网表文件：{os.path.basename(netlist_path)}")
         self.append_log(f"约束文件：{os.path.basename(sym_path)}")
-        self.append_log(f"目标面积：{target_area} | 优化步数：{max_steps}")
-        self.append_log(f"共质心权重：{tmoc_weight} | 对称性权重：{symmetry_weight}")
+        self.append_log(f"目标面积：{params['target_area']} | 优化步数：{params['max_steps']}")
+        self.append_log(f"共质心权重：{params['tmoc_weight']} | 对称性权重：{params['symmetry_weight']}")
         self.append_log("-" * 70)
 
-        start_time = time.time()
+        # 先把上一轮的图清掉，让初始图能立刻显示出来
+        self.reset_figure()
 
-        try:
-            # 临时切换工作目录到analog-placement
-            original_cwd = os.getcwd()
-            os.chdir(BASE_DIR)
+        worker = LayoutWorker(params)
+        self.worker = worker
+        # 托管引用：页面被销毁时线程不会跟着被销毁
+        _ACTIVE_WORKERS.add(worker)
+        worker.finished.connect(lambda: _ACTIVE_WORKERS.discard(worker))
 
-            # 设置matplotlib后端避免冲突
-            import matplotlib
-            matplotlib.use('Qt5Agg')
+        worker.figure_ready.connect(self.on_figure_ready)
+        worker.succeeded.connect(self.on_layout_succeeded)
+        worker.failed.connect(self.on_layout_failed)
+        worker.finished.connect(self.on_worker_finished)
 
-            # 导入布局函数
-            from LAYOUT import optimize_layout
+        self.start_time = time.time()
+        self.set_button_running(self.layout_btn, "正在进行自动布局优化...")
+        worker.start()
 
-            # 执行布局（传入所有参数）
-            x, y = optimize_layout(
-                netlist_file=netlist_path,
-                sym_file=sym_path,
-                target_area=target_area,
-                max_steps=max_steps,
-                tmoc_weight=tmoc_weight,
-                symmetry_weight=symmetry_weight,
-                hpwl_weight=hpwl_weight,
-                max_overlap_percent=max_overlap_percent,
-                max_symmetry_error=max_symmetry_error,
-                max_oob_penalty=max_oob_penalty,
-                plot_intermediate=True
-            )
+    def on_layout_succeeded(self, x, y):
+        elapsed = time.time() - self.start_time
+        self.append_log(f"✅ 布局优化完成，总耗时 {elapsed:.2f} 秒", "success")
+        self.append_log(f"器件X坐标：{x}")
+        self.append_log(f"器件Y坐标：{y}")
 
-            elapsed = time.time() - start_time
+    def on_layout_failed(self, error_text):
+        elapsed = time.time() - self.start_time
+        self.append_log(f"❌ 布局失败，耗时 {elapsed:.2f} 秒", "error")
+        self.append_log(error_text, "error")
 
-            self.append_log(f"✅ 布局优化完成，总耗时 {elapsed:.2f} 秒", "success")
-            self.append_log(f"器件X坐标：{x}")
-            self.append_log(f"器件Y坐标：{y}")
-
-        except Exception as e:
-            elapsed = time.time() - start_time
-            self.append_log(f"❌ 布局失败，耗时 {elapsed:.2f} 秒", "error")
-            self.append_log(f"错误信息：{str(e)}", "error")
-            import traceback
-            self.append_log(traceback.format_exc(), "error")
-        finally:
-            os.chdir(original_cwd)
-            # 恢复按钮状态
-            self.restore_button(self.layout_btn, "开始自动布局优化")
-            self.append_log("=" * 70 + "\n")
+    def on_worker_finished(self):
+        self.restore_button(self.layout_btn, "开始自动布局优化")
+        self.append_log("=" * 70 + "\n")
+        if self.worker is not None:
+            self.worker.deleteLater()
+            self.worker = None
 
 
 # 模块可以独立运行测试
