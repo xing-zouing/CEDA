@@ -400,7 +400,7 @@ def revised_steiner_trees(input_steiner_trees1, requir_adjust_trees1, adjusted_s
             indices.append(t)
     for l, index in enumerate(indices):
         input_steiner_trees1[index] = adjusted_segments11[l]
-    print("替换后的 steiner_trees 列表:", input_steiner_trees1)
+    # 注意：这里是原地修改 input_steiner_trees1，调用方需要自己备份原列表
     return input_steiner_trees1
 
 # GDS解析相关

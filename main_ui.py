@@ -30,7 +30,7 @@ from device_generation.run import CircuitGenerator
 from ota_case1.ui import CircuitOptWindow
 from analog_placement.layout_ui import AutoLayoutWindow
 # 导入布局布线模块
-from rsmt_router.routing_ui import RSMTRoutingWidget
+from rsmt_router.routing_page import RoutingPage
 
 
 # ====================== 功能页通用容器（带返回按钮） ======================
@@ -473,7 +473,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(page3)
 
         # 4号：自动布线
-        page4_content = RSMTRoutingWidget()
+        page4_content = RoutingPage()
         page4 = FunctionPageWrapper("自动布线", page4_content)
         page4.go_home_signal.connect(self.go_back_home)
         self.stack.addWidget(page4)
